@@ -134,7 +134,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .mobile-nav { display: none; }
 
 /* =========================================================================
-   READER & THEMES
+   READER, FOCUS MODE & THEMES
    ========================================================================= */
 .reader-app {
   height: 100dvh;
@@ -147,6 +147,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   background: var(--reader-bg);
   position: relative;
   overflow: hidden;
+  user-select: none;
 }
 
 .theme-sepia {
@@ -170,6 +171,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   filter: sepia(0.48) brightness(0.97) contrast(0.96) saturate(1.1);
 }
 
+/* 1-Tap Focus Mode Transitions */
+.reader-topbar,
+.page-controls,
+.reader-footer {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
+}
+
 .reader-topbar {
   height: 65px;
   flex-shrink: 0;
@@ -179,7 +187,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   padding: 0 25px;
   border-bottom: 1px solid var(--line);
   background: var(--paper);
-  z-index: 10;
+  z-index: 40;
 }
 .theme-night .reader-topbar, .theme-night .reader-footer {
   background: #191d1a;
@@ -188,6 +196,23 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .theme-sepia .reader-topbar, .theme-sepia .reader-footer {
   background: #ede3cc;
   border-color: #d5c8ad;
+}
+
+/* Single-Tap to Hide Top Ribbon & Page Navigation Bar */
+.reader-app.focus-mode .reader-topbar {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+.reader-app.focus-mode .page-controls {
+  transform: translate(-50%, 110px) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.reader-app.focus-mode .reader-footer {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
 }
 
 .reader-book-title {
@@ -230,20 +255,22 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   background: var(--reader-bg);
 }
 
-/* Page Stage with 3D Perspective */
+/* Page Stage (1-finger native scroll, clean of perspective traps) */
 .page-stage {
   position: relative;
   flex: 1;
   min-width: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 30px 20px 95px;
+  padding: 30px 20px 105px;
   scrollbar-width: thin;
   scrollbar-color: #b9b9ac transparent;
-  touch-action: none;
-  perspective: 2000px;
+  touch-action: pan-y pan-x;
+  cursor: default;
+  -webkit-overflow-scrolling: touch;
 }
 
 .stage-transform-layer {
@@ -255,7 +282,9 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   will-change: transform;
 }
 
-/* 3D Page Turning Animations */
+/* =========================================================================
+   AUTHENTIC 3D PAGE CURL TURN
+   ========================================================================= */
 .pdf-page-wrap {
   margin: 0 auto 28px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
@@ -264,54 +293,108 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   border-radius: 3px;
   position: relative;
   transform-style: preserve-3d;
-  will-change: transform, box-shadow;
-  transition: box-shadow 0.2s ease;
+  perspective: 1600px;
+  will-change: transform, clip-path, filter;
+  transition: box-shadow 0.25s ease;
+  user-select: text;
+}
+
+.curl-fold-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.pdf-page-wrap.turning-next .curl-fold-overlay {
+  opacity: 1;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(0, 0, 0, 0.05) 55%,
+    rgba(255, 255, 255, 0.75) 75%,
+    rgba(0, 0, 0, 0.28) 88%,
+    rgba(0, 0, 0, 0.6) 100%
+  );
+  mix-blend-mode: multiply;
+}
+
+.pdf-page-wrap.turning-prev .curl-fold-overlay {
+  opacity: 1;
+  background: linear-gradient(
+    to left,
+    transparent 0%,
+    rgba(0, 0, 0, 0.05) 55%,
+    rgba(255, 255, 255, 0.75) 75%,
+    rgba(0, 0, 0, 0.28) 88%,
+    rgba(0, 0, 0, 0.6) 100%
+  );
+  mix-blend-mode: multiply;
 }
 
 .pdf-page-wrap.turning-next {
-  animation: sexyTurnNext 0.42s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+  animation: authenticPageCurlNext 0.44s cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
   transform-origin: left center;
 }
 
 .pdf-page-wrap.turning-prev {
-  animation: sexyTurnPrev 0.42s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+  animation: authenticPageCurlPrev 0.44s cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
   transform-origin: right center;
 }
 
-@keyframes sexyTurnNext {
+@keyframes authenticPageCurlNext {
   0% {
-    transform: perspective(1600px) rotateY(0deg) translateX(0) scale(1);
-    box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+    transform: perspective(1600px) rotateY(0deg) skewY(0deg);
+    filter: drop-shadow(0 8px 24px rgba(0,0,0,0.12));
   }
-  40% {
-    box-shadow: -22px 16px 40px rgba(0,0,0,0.28);
-    transform: perspective(1600px) rotateY(-24deg) translateX(-35px) scale(0.97);
+  32% {
+    clip-path: polygon(0 0, 85% 0, 68% 100%, 0 100%);
+    transform: perspective(1600px) rotateY(-18deg) skewY(-2.5deg) translateX(-18px) scale(0.99);
+    filter: drop-shadow(-18px 14px 28px rgba(0,0,0,0.3));
+  }
+  68% {
+    clip-path: polygon(0 0, 42% 0, 18% 100%, 0 100%);
+    transform: perspective(1600px) rotateY(-46deg) skewY(-5.5deg) translateX(-48px) scale(0.96);
+    filter: drop-shadow(-32px 22px 38px rgba(0,0,0,0.38));
   }
   100% {
-    transform: perspective(1600px) rotateY(-85deg) translateX(-140px) scale(0.92);
-    opacity: 0.05;
-    box-shadow: -35px 25px 50px rgba(0,0,0,0.35);
+    clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);
+    transform: perspective(1600px) rotateY(-78deg) skewY(-8.5deg) translateX(-95px) scale(0.91);
+    filter: drop-shadow(-42px 28px 46px rgba(0,0,0,0.45));
+    opacity: 0;
   }
 }
 
-@keyframes sexyTurnPrev {
+@keyframes authenticPageCurlPrev {
   0% {
-    transform: perspective(1600px) rotateY(85deg) translateX(140px) scale(0.92);
-    opacity: 0.05;
-    box-shadow: 35px 25px 50px rgba(0,0,0,0.35);
+    clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);
+    transform: perspective(1600px) rotateY(78deg) skewY(8.5deg) translateX(95px) scale(0.91);
+    filter: drop-shadow(42px 28px 46px rgba(0,0,0,0.45));
+    opacity: 0;
   }
-  60% {
-    box-shadow: 22px 16px 40px rgba(0,0,0,0.28);
-    transform: perspective(1600px) rotateY(20deg) translateX(30px) scale(0.97);
+  32% {
+    clip-path: polygon(0 0, 42% 0, 18% 100%, 0 100%);
+    transform: perspective(1600px) rotateY(46deg) skewY(5.5deg) translateX(48px) scale(0.96);
+    filter: drop-shadow(32px 22px 38px rgba(0,0,0,0.38));
+    opacity: 1;
+  }
+  68% {
+    clip-path: polygon(0 0, 85% 0, 68% 100%, 0 100%);
+    transform: perspective(1600px) rotateY(18deg) skewY(2.5deg) translateX(18px) scale(0.99);
+    filter: drop-shadow(18px 14px 28px rgba(0,0,0,0.3));
   }
   100% {
-    transform: perspective(1600px) rotateY(0deg) translateX(0) scale(1);
-    box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+    transform: perspective(1600px) rotateY(0deg) skewY(0deg);
+    filter: drop-shadow(0 8px 24px rgba(0,0,0,0.12));
     opacity: 1;
   }
 }
 
-/* PDF Page and Text Layer overlay */
+/* PDF Page and Text Layer */
 .react-pdf__Document {
   display: flex;
   flex-direction: column;
@@ -348,6 +431,69 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   background: rgba(110, 180, 130, 0.45);
 }
 .react-pdf__Page__annotations { display: none !important; }
+
+/* =========================================================================
+   STATIONARY FLOATING PAGE CONTROLS (FIXED & IMMUNE TO SCROLLING)
+   ========================================================================= */
+.page-controls {
+  position: fixed !important;
+  z-index: 50 !important;
+  bottom: 42px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  color: #5d645a;
+  pointer-events: auto;
+}
+.theme-night .page-controls {
+  background: #1d221f;
+  border-color: #343d35;
+  color: #cfd4cb;
+}
+.theme-sepia .page-controls {
+  background: #f1e7d2;
+  border-color: #d8cbb1;
+}
+
+.page-controls .icon-btn { width: 34px; height: 34px; }
+.page-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #8b8d83;
+  padding: 0 4px;
+}
+.page-count input {
+  width: 36px;
+  height: 28px;
+  border: 1px solid #dcdad0;
+  background: transparent;
+  border-radius: 5px;
+  text-align: center;
+  color: var(--reader-ink);
+  outline: none;
+  font-size: 11px;
+}
+.control-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+  margin: 0 4px;
+}
+.zoom-value {
+  font-size: 11px;
+  min-width: 36px;
+  text-align: center;
+  color: #8b8d83;
+}
 
 /* =========================================================================
    BRIGHTNESS CONTROLS & HUD
@@ -407,66 +553,6 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* Floating Navigation Controls */
-.page-controls {
-  position: fixed;
-  z-index: 4;
-  bottom: 43px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  box-shadow: 0 8px 28px rgba(0,0,0,0.14);
-  color: #5d645a;
-}
-.theme-night .page-controls {
-  background: #1d221f;
-  border-color: #343d35;
-  color: #cfd4cb;
-}
-.theme-sepia .page-controls {
-  background: #f1e7d2;
-  border-color: #d8cbb1;
-}
-
-.page-controls .icon-btn { width: 34px; height: 34px; }
-.page-count {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: #8b8d83;
-  padding: 0 4px;
-}
-.page-count input {
-  width: 36px;
-  height: 28px;
-  border: 1px solid #dcdad0;
-  background: transparent;
-  border-radius: 5px;
-  text-align: center;
-  color: var(--reader-ink);
-  outline: none;
-  font-size: 11px;
-}
-.control-divider {
-  width: 1px;
-  height: 22px;
-  background: var(--line);
-  margin: 0 4px;
-}
-.zoom-value {
-  font-size: 11px;
-  min-width: 36px;
-  text-align: center;
-  color: #8b8d83;
-}
-
 /* Footer & Panels */
 .reader-footer {
   height: 31px;
@@ -479,7 +565,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   border-top: 1px solid var(--line);
   font-size: 9px;
   color: #8d9186;
-  z-index: 10;
+  z-index: 40;
 }
 .reader-footer .status-dot { width: 5px; height: 5px; margin-right: 3px; }
 .reader-footer > span:nth-child(2) { margin-left: auto; }
@@ -503,7 +589,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   background: var(--paper);
   overflow: auto;
   padding: 22px 19px 35px;
-  z-index: 10;
+  z-index: 45;
 }
 .theme-night .reader-sidepanel { background: #191d1a; }
 .theme-sepia .reader-sidepanel { background: #ece2cb; }
@@ -602,8 +688,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .reader-actions { gap: 2px; }
   .reader-actions .icon-btn { width: 33px; height: 34px; }
   .reader-actions .icon-btn svg { width: 17px; height: 17px; }
-  .page-stage { padding: 15px 6px 78px; }
-  .page-controls { bottom: 39px; gap: 2px; padding: 4px 6px; border-radius: 11px; max-width: calc(100vw - 20px); }
+  .page-stage { padding: 15px 6px 85px; }
+  .page-controls { bottom: 38px !important; gap: 2px; padding: 4px 6px; border-radius: 11px; max-width: calc(100vw - 20px); }
   .page-controls .icon-btn { width: 31px; height: 32px; }
   .page-count { gap: 3px; padding: 0 2px; }
   .page-count input { width: 30px; }
@@ -611,7 +697,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .zoom-value { font-size: 9px; min-width: 28px; }
   .reader-footer { height: 27px; padding: 0 12px; }
   .footer-progress { width: 65px; }
-  .reader-sidepanel { position: absolute; z-index: 15; right: 0; top: 0; bottom: 0; width: min(340px, 92vw); box-shadow: -8px 0 30px rgba(0,0,0,0.1); }
+  .reader-sidepanel { position: absolute; z-index: 55; right: 0; top: 0; bottom: 0; width: min(340px, 92vw); box-shadow: -8px 0 30px rgba(0,0,0,0.1); }
   .notebook-toolbar { margin-top: 27px; }
 }
 @media(max-width: 390px) {
