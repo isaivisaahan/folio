@@ -4,7 +4,7 @@ import {
   BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2,
   Highlighter, LibraryBig, ListFilter, Maximize2, Minimize2, Moon,
   MoreHorizontal, NotebookPen, Search, Sun, Trash2, Upload, X, ZoomIn, ZoomOut,
-  Download, Rows3, FileText, Eye, EyeOff, BookA, Copy, Volume2, Loader2
+  Download, Rows3, FileText, Eye, EyeOff, BookA, Copy, Volume2, Loader2, ExternalLink
 } from 'lucide-react';
 import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './db';
 
@@ -31,6 +31,102 @@ interface DictResult {
 const coverColors = ['#d7e1d5', '#ead8c5', '#d7dce8', '#e8d5d7', '#d9e2e5', '#e9e3cb'];
 const fmtSize = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`;
 const shortDate = (n: number) => new Date(n).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+// =========================================================================
+// RESILIENT MULTI-TIER DICTIONARY RESOLVER
+// =========================================================================
+async function fetchWordDefinition(rawWord: string): Promise<DictResult | null> {
+  const cleanWord = rawWord.replace(/[^a-zA-Z'-]/g, '').toLowerCase();
+  if (!cleanWord) return null;
+
+  // 1. Try Free Dictionary API
+  try {
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const item = data[0];
+        const phonetic = item.phonetic || item.phonetics?.find((p: any) => p.text)?.text;
+        const audio = item.phonetics?.find((p: any) => p.audio && p.audio.trim().length > 0)?.audio;
+        return {
+          word: item.word || cleanWord,
+          phonetic,
+          audio,
+          meanings: item.meanings || []
+        };
+      }
+    }
+  } catch {
+    // Silently proceed to Datamuse fallback
+  }
+
+  // 2. Fallback to Datamuse API (Guaranteed CORS enabled, high uptime)
+  try {
+    const res = await fetch(`https://api.datamuse.com/words?sp=${encodeURIComponent(cleanWord)}&md=dp&max=1`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].defs) && data[0].defs.length > 0) {
+        const item = data[0];
+        const posMap: Record<string, string> = {
+          n: 'noun',
+          v: 'verb',
+          adj: 'adjective',
+          adv: 'adverb',
+          prep: 'preposition',
+          pron: 'pronoun',
+          conj: 'conjunction',
+          interj: 'interjection'
+        };
+
+        const grouped: Record<string, DictDefinition[]> = {};
+        for (const defItem of item.defs) {
+          const parts = defItem.split('\t');
+          const pos = posMap[parts[0]] || parts[0] || 'general';
+          const definition = parts[1] || parts[0];
+          if (!grouped[pos]) grouped[pos] = [];
+          grouped[pos].push({ definition });
+        }
+
+        const meanings: DictMeaning[] = Object.entries(grouped).map(([partOfSpeech, definitions]) => ({
+          partOfSpeech,
+          definitions
+        }));
+
+        return {
+          word: item.word || cleanWord,
+          meanings
+        };
+      }
+    }
+  } catch {
+    // Proceed to Wiktionary fallback
+  }
+
+  // 3. Fallback to Wikimedia Wiktionary REST API
+  try {
+    const res = await fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(cleanWord)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.en && Array.isArray(data.en) && data.en.length > 0) {
+        const meanings: DictMeaning[] = data.en.map((section: any) => ({
+          partOfSpeech: section.partOfSpeech || 'general',
+          definitions: (section.definitions || []).map((d: any) => ({
+            definition: (d.definition || '').replace(/<[^>]+>/g, '').trim(),
+            example: d.examples && d.examples[0] ? d.examples[0].replace(/<[^>]+>/g, '').trim() : undefined
+          })).filter((d: any) => d.definition.length > 0)
+        })).filter((m: any) => m.definitions.length > 0);
+
+        if (meanings.length > 0) {
+          return { word: cleanWord, meanings };
+        }
+      }
+    }
+  } catch {
+    // Handled in caller
+  }
+
+  return null;
+}
 
 export default function App() {
   const [books, setBooks] = useState<Book[]>([]);
@@ -76,7 +172,6 @@ export default function App() {
   const readerRef = useRef<HTMLDivElement>(null);
   const transformLayerRef = useRef<HTMLDivElement>(null);
 
-  // Tablet 1-Tap & 2-Finger Tracking
   const singleTapRef = useRef<{ x: number; y: number; time: number; hasMoved: boolean }>({
     x: 0,
     y: 0,
@@ -211,7 +306,6 @@ export default function App() {
     setBooks(prev => prev.map(b => b.id === active.id ? { ...b, lastPage: p, pageCount: total || b.pageCount, progress, lastOpened: Date.now() } : b));
   };
 
-  // 3D Page Curl Turn on Navigation
   const animatedCurlJump = (targetPage: number, dir: 'next' | 'prev') => {
     if (scrollMode === 'continuous') {
       jump(targetPage);
@@ -256,7 +350,6 @@ export default function App() {
     }
   };
 
-  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!active || showNotes || showDictModal) return;
@@ -285,7 +378,6 @@ export default function App() {
     }
   };
 
-  // Text Selection Check
   const checkSelection = () => {
     const sel = window.getSelection();
     const text = sel?.toString().trim() ?? '';
@@ -325,8 +417,11 @@ export default function App() {
     setToast('Highlight saved.');
   };
 
+  // Perform multi-tier lookup
   const lookupDictionary = async () => {
-    const rawWord = selectedText.trim().split(/\s+/)[0].replace(/[^a-zA-Z-]/g, '').toLowerCase();
+    const words = selectedText.trim().split(/\s+/);
+    const rawWord = words[0].replace(/[^a-zA-Z'-]/g, '').toLowerCase();
+
     if (!rawWord) {
       setToast('Select a word to look up its definition.');
       return;
@@ -337,27 +432,31 @@ export default function App() {
     setShowDictModal(true);
     setPopoverPos(null);
 
-    try {
-      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(rawWord)}`);
-      if (!res.ok) throw new Error('Word not found');
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        const item = data[0];
-        const phonetic = item.phonetic || item.phonetics?.find((p: any) => p.text)?.text;
-        const audio = item.phonetics?.find((p: any) => p.audio && p.audio.trim().length > 0)?.audio;
-        setDictResult({
-          word: item.word || rawWord,
-          phonetic,
-          audio,
-          meanings: item.meanings || []
-        });
-      } else {
-        setDictResult(null);
-      }
-    } catch {
-      setDictResult(null);
-    } finally {
-      setDictLoading(false);
+    const result = await fetchWordDefinition(rawWord);
+    setDictResult(result);
+    setDictLoading(false);
+  };
+
+  // Audio pronunciation with Native SpeechSynthesis fallback
+  const playWordPronunciation = () => {
+    if (dictResult?.audio) {
+      const audioUrl = dictResult.audio.startsWith('//') ? `https:${dictResult.audio}` : dictResult.audio;
+      const sound = new Audio(audioUrl);
+      sound.play().catch(() => {
+        // Fallback to native Web Speech API if remote audio playback fails
+        speakNative(dictResult.word || dictWord);
+      });
+    } else {
+      speakNative(dictResult?.word || dictWord);
+    }
+  };
+
+  const speakNative = (text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      window.speechSynthesis.speak(utterance);
     }
   };
 
@@ -370,9 +469,7 @@ export default function App() {
     }
   };
 
-  // =========================================================================
-  // TABLET TOUCH ENGINE WITH ACCURATE CONTINUOUS PINCH-TO-ZOOM
-  // =========================================================================
+  // Touch engine with focal point zoom
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
       const t = e.touches[0];
@@ -390,7 +487,6 @@ export default function App() {
       const centerY = (t1.clientY + t2.clientY) / 2;
       const centerX = (t1.clientX + t2.clientX) / 2;
 
-      // Set transform-origin right to the exact pinch focal point on the screen
       if (transformLayerRef.current) {
         const rect = transformLayerRef.current.getBoundingClientRect();
         const originX = Math.round(centerX - rect.left);
@@ -430,7 +526,6 @@ export default function App() {
       const deltaDist = currentDist - twoFingerRef.current.startDist;
       const deltaY = currentCenterY - twoFingerRef.current.startCenterY;
 
-      // Strict discrimination: Distance change takes precedence for Pinch Zoom!
       if (twoFingerRef.current.active === 'deciding') {
         if (Math.abs(deltaDist) > 10) {
           twoFingerRef.current.active = 'pinch';
@@ -439,7 +534,6 @@ export default function App() {
         }
       }
 
-      // 1. PINCH ZOOM (Hardware-accelerated CSS GPU scale around focal point)
       if (twoFingerRef.current.active === 'pinch') {
         const ratio = currentDist / twoFingerRef.current.startDist;
         twoFingerRef.current.scaleRatio = ratio;
@@ -447,10 +541,7 @@ export default function App() {
           transformLayerRef.current.style.transform = `scale(${ratio})`;
           transformLayerRef.current.style.transition = 'none';
         }
-      }
-
-      // 2. BRIGHTNESS (Only when both fingers swipe together vertically)
-      else if (twoFingerRef.current.active === 'brightness') {
+      } else if (twoFingerRef.current.active === 'brightness') {
         const sensitivity = 0.0035;
         const newBright = Math.min(1.0, Math.max(0.15, +(twoFingerRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
         setBrightness(newBright);
@@ -463,7 +554,6 @@ export default function App() {
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    // 1-Tap Toggle
     if (e.changedTouches.length === 1 && !singleTapRef.current.hasMoved) {
       const dt = Date.now() - singleTapRef.current.time;
       if (dt < 380) {
@@ -477,7 +567,6 @@ export default function App() {
       }
     }
 
-    // Commit Pinch Zoom without losing scroll context
     if (twoFingerRef.current.active === 'pinch') {
       const { startZoom, scaleRatio } = twoFingerRef.current;
       const finalZoom = Math.min(2.5, Math.max(0.6, +(startZoom * scaleRatio).toFixed(2)));
@@ -516,7 +605,6 @@ export default function App() {
     }
   };
 
-  // Continuous scroll page tracking
   useEffect(() => {
     if (scrollMode !== 'continuous' || !pageCount) return;
     const observer = new IntersectionObserver(
@@ -682,7 +770,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Dictionary Meaning Modal */}
+        {/* Robust Multi-Tier Dictionary Modal */}
         {showDictModal && (
           <div className="dictionary-backdrop" onClick={() => setShowDictModal(false)}>
             <div className="dictionary-card" onClick={e => e.stopPropagation()}>
@@ -690,20 +778,13 @@ export default function App() {
                 <div className="dict-word-row">
                   <h3>{dictResult?.word || dictWord}</h3>
                   {dictResult?.phonetic && <span className="dict-phonetic">{dictResult.phonetic}</span>}
-                  {dictResult?.audio && (
-                    <button
-                      className="dict-audio-btn"
-                      onClick={() => {
-                        const audioUrl = dictResult.audio!.startsWith('//')
-                          ? `https:${dictResult.audio}`
-                          : dictResult.audio!;
-                        new Audio(audioUrl).play();
-                      }}
-                      title="Play pronunciation"
-                    >
-                      <Volume2 size={16} />
-                    </button>
-                  )}
+                  <button
+                    className="dict-audio-btn"
+                    onClick={playWordPronunciation}
+                    title="Pronounce word"
+                  >
+                    <Volume2 size={16} />
+                  </button>
                 </div>
                 <button className="icon-btn" onClick={() => setShowDictModal(false)}>
                   <X size={18} />
@@ -721,7 +802,7 @@ export default function App() {
                     <div className="dict-meaning-block" key={idx}>
                       <span className="dict-part-of-speech">{m.partOfSpeech.toUpperCase()}</span>
                       <ol className="dict-definitions-list">
-                        {m.definitions.slice(0, 3).map((d, dIdx) => (
+                        {m.definitions.slice(0, 4).map((d, dIdx) => (
                           <li className="dict-definition-item" key={dIdx}>
                             <span>{d.definition}</span>
                             {d.example && <span className="dict-example">“{d.example}”</span>}
@@ -732,10 +813,29 @@ export default function App() {
                   ))
                 ) : (
                   <div className="empty-small" style={{ padding: '20px 0', textAlign: 'center' }}>
-                    <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600 }}>No exact definition found for “{dictWord}”.</p>
-                    <p style={{ margin: 0, fontSize: 12, color: '#888' }}>
-                      Make sure you selected a single root word and you are connected to the internet.
-                    </p>
+                    <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600 }}>No online definition found for “{dictWord}”.</p>
+                    <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
+                      <a
+                        href={`https://www.google.com/search?q=define+${encodeURIComponent(dictWord)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="secondary-btn"
+                        style={{ fontSize: 11, padding: '6px 12px', textDecoration: 'none' }}
+                      >
+                        <ExternalLink size={13} />
+                        <span>Search Google</span>
+                      </a>
+                      <a
+                        href={`https://en.wiktionary.org/wiki/${encodeURIComponent(dictWord)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="secondary-btn"
+                        style={{ fontSize: 11, padding: '6px 12px', textDecoration: 'none' }}
+                      >
+                        <BookOpen size={13} />
+                        <span>Wiktionary</span>
+                      </a>
+                    </div>
                   </div>
                 )}
               </div>
@@ -859,7 +959,6 @@ export default function App() {
                   </div>
                 ) : (
                   Array.from({ length: pageCount || 1 }, (_, i) => i + 1).map(p => {
-                    // Windowed rendering in continuous scroll to keep memory small & zoom fast
                     const isNear = pageCount <= 12 || Math.abs(p - page) <= 3;
                     return (
                       <div
@@ -974,7 +1073,6 @@ export default function App() {
           )}
         </main>
 
-        {/* Stationary Floating Page Controls */}
         <div className="page-controls" onClick={e => e.stopPropagation()}>
           <button
             className="icon-btn"
@@ -1069,7 +1167,6 @@ export default function App() {
 
         {tab === 'library' ? (
           <div className="library-content">
-            {/* Minimal Clean Header with Quick Controls */}
             <div className="library-header-row">
               <div className="library-title-group">
                 <h1>Library</h1>
@@ -1098,7 +1195,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Compact In-Progress Shelf */}
             {continueBooks.length > 0 && !query && (
               <section className="continue-shelf">
                 <div className="shelf-label">CONTINUE READING</div>
@@ -1121,7 +1217,6 @@ export default function App() {
               </section>
             )}
 
-            {/* Direct Book Grid */}
             {visibleBooks.length ? (
               <div className="book-grid">
                 {visibleBooks.map(b => (
