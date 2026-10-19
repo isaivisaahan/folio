@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page } from 'react-pdf';
 import {
-  BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2, Files,
+  BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2,
   Highlighter, LibraryBig, ListFilter, Maximize2, Minimize2, Moon,
   MoreHorizontal, NotebookPen, Search, Sun, Trash2, Upload, X, ZoomIn, ZoomOut,
   Download, Rows3, FileText, Eye, EyeOff, BookA, Copy, Volume2, Loader2
@@ -76,7 +76,7 @@ export default function App() {
   const readerRef = useRef<HTMLDivElement>(null);
   const transformLayerRef = useRef<HTMLDivElement>(null);
 
-  // Tablet 1-Tap & 2-Finger Tracking Refs
+  // Tablet 1-Tap & 2-Finger Tracking
   const singleTapRef = useRef<{ x: number; y: number; time: number; hasMoved: boolean }>({
     x: 0,
     y: 0,
@@ -90,12 +90,14 @@ export default function App() {
     startCenterY: number;
     startZoom: number;
     startBrightness: number;
+    scaleRatio: number;
   }>({
     active: 'none',
     startDist: 0,
     startCenterY: 0,
     startZoom: 1,
-    startBrightness: 1
+    startBrightness: 1,
+    scaleRatio: 1
   });
 
   const refresh = async () => {
@@ -242,7 +244,6 @@ export default function App() {
     }
   };
 
-  // Focus Mode toggle helper
   const toggleFocusMode = () => {
     setFocusMode(prev => {
       const next = !prev;
@@ -284,9 +285,7 @@ export default function App() {
     }
   };
 
-  // =========================================================================
-  // TEXT SELECTION & CONTEXTUAL ACTION BAR
-  // =========================================================================
+  // Text Selection Check
   const checkSelection = () => {
     const sel = window.getSelection();
     const text = sel?.toString().trim() ?? '';
@@ -309,7 +308,6 @@ export default function App() {
     }
   };
 
-  // 1-Tap Quick Highlight from popover
   const quickHighlight = async (color: string) => {
     if (!active || !selectedText.trim()) return;
     await db.notes.add({
@@ -327,7 +325,6 @@ export default function App() {
     setToast('Highlight saved.');
   };
 
-  // Lookup word in Dictionary API
   const lookupDictionary = async () => {
     const rawWord = selectedText.trim().split(/\s+/)[0].replace(/[^a-zA-Z-]/g, '').toLowerCase();
     if (!rawWord) {
@@ -374,7 +371,7 @@ export default function App() {
   };
 
   // =========================================================================
-  // TABLET TOUCH ENGINE
+  // TABLET TOUCH ENGINE WITH ACCURATE CONTINUOUS PINCH-TO-ZOOM
   // =========================================================================
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
@@ -391,13 +388,23 @@ export default function App() {
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
       const centerY = (t1.clientY + t2.clientY) / 2;
+      const centerX = (t1.clientX + t2.clientX) / 2;
+
+      // Set transform-origin right to the exact pinch focal point on the screen
+      if (transformLayerRef.current) {
+        const rect = transformLayerRef.current.getBoundingClientRect();
+        const originX = Math.round(centerX - rect.left);
+        const originY = Math.round(centerY - rect.top);
+        transformLayerRef.current.style.transformOrigin = `${originX}px ${originY}px`;
+      }
 
       twoFingerRef.current = {
         active: 'deciding',
-        startDist: dist,
+        startDist: Math.max(10, dist),
         startCenterY: centerY,
         startZoom: zoom,
-        startBrightness: brightness
+        startBrightness: brightness,
+        scaleRatio: 1
       };
       singleTapRef.current.hasMoved = true;
     }
@@ -423,24 +430,26 @@ export default function App() {
       const deltaDist = currentDist - twoFingerRef.current.startDist;
       const deltaY = currentCenterY - twoFingerRef.current.startCenterY;
 
+      // Strict discrimination: Distance change takes precedence for Pinch Zoom!
       if (twoFingerRef.current.active === 'deciding') {
-        if (Math.abs(deltaDist) > 18) {
+        if (Math.abs(deltaDist) > 10) {
           twoFingerRef.current.active = 'pinch';
-        } else if (Math.abs(deltaY) > 18) {
+        } else if (Math.abs(deltaY) > 22 && Math.abs(deltaDist) < 12) {
           twoFingerRef.current.active = 'brightness';
         }
       }
 
-      // 1. PINCH ZOOM (GPU Transform)
+      // 1. PINCH ZOOM (Hardware-accelerated CSS GPU scale around focal point)
       if (twoFingerRef.current.active === 'pinch') {
-        const scaleRatio = currentDist / twoFingerRef.current.startDist;
+        const ratio = currentDist / twoFingerRef.current.startDist;
+        twoFingerRef.current.scaleRatio = ratio;
         if (transformLayerRef.current) {
-          transformLayerRef.current.style.transform = `scale(${scaleRatio})`;
+          transformLayerRef.current.style.transform = `scale(${ratio})`;
           transformLayerRef.current.style.transition = 'none';
         }
       }
 
-      // 2. BRIGHTNESS (2-Finger Vertical Swipe)
+      // 2. BRIGHTNESS (Only when both fingers swipe together vertically)
       else if (twoFingerRef.current.active === 'brightness') {
         const sensitivity = 0.0035;
         const newBright = Math.min(1.0, Math.max(0.15, +(twoFingerRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
@@ -454,7 +463,7 @@ export default function App() {
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    // 1-Tap Toggle check
+    // 1-Tap Toggle
     if (e.changedTouches.length === 1 && !singleTapRef.current.hasMoved) {
       const dt = Date.now() - singleTapRef.current.time;
       if (dt < 380) {
@@ -468,17 +477,18 @@ export default function App() {
       }
     }
 
-    // Commit 2-finger zoom
+    // Commit Pinch Zoom without losing scroll context
     if (twoFingerRef.current.active === 'pinch') {
-      if (transformLayerRef.current) {
-        const matrix = new DOMMatrix(getComputedStyle(transformLayerRef.current).transform);
-        const appliedScale = matrix.a || 1;
-        transformLayerRef.current.style.transform = 'none';
-        transformLayerRef.current.style.transition = 'none';
+      const { startZoom, scaleRatio } = twoFingerRef.current;
+      const finalZoom = Math.min(2.5, Math.max(0.6, +(startZoom * scaleRatio).toFixed(2)));
 
-        const finalZoom = Math.min(2.5, Math.max(0.6, +(twoFingerRef.current.startZoom * appliedScale).toFixed(2)));
-        setZoom(finalZoom);
+      if (transformLayerRef.current) {
+        transformLayerRef.current.style.transform = 'none';
+        transformLayerRef.current.style.transformOrigin = 'center top';
+        transformLayerRef.current.style.transition = 'none';
       }
+
+      setZoom(finalZoom);
     }
 
     twoFingerRef.current.active = 'none';
@@ -506,7 +516,7 @@ export default function App() {
     }
   };
 
-  // Page observer for continuous scroll
+  // Continuous scroll page tracking
   useEffect(() => {
     if (scrollMode !== 'continuous' || !pageCount) return;
     const observer = new IntersectionObserver(
@@ -520,7 +530,7 @@ export default function App() {
           }
         }
       },
-      { root: readerRef.current, threshold: 0.4 }
+      { root: readerRef.current, threshold: 0.3 }
     );
 
     for (let i = 1; i <= pageCount; i++) {
@@ -612,13 +622,11 @@ export default function App() {
 
     return (
       <div className={`app reader-app theme-${theme} ${focusMode ? 'focus-mode' : ''}`}>
-        {/* Real-time Screen Dimming Overlay */}
         <div
           className="reader-brightness-overlay"
           style={{ opacity: Math.max(0, 1 - brightness) }}
         />
 
-        {/* Floating "Show Controls" Pill When in Focus Mode */}
         {focusMode && (
           <button
             className="focus-exit-pill"
@@ -735,7 +743,7 @@ export default function App() {
               <div className="dict-footer">
                 <button
                   className="secondary-btn"
-                  style={{ padding: '7px 12px', fontSize: 11 }}
+                  style={{ padding: '6px 12px', fontSize: 11 }}
                   onClick={() => {
                     void quickHighlight('#f6d978');
                     setShowDictModal(false);
@@ -755,10 +763,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Floating Brightness HUD */}
         {showBrightnessHud && (
           <div className="brightness-hud">
-            <Sun size={18} />
+            <Sun size={17} />
             <div className="brightness-hud-track">
               <div className="brightness-hud-fill" style={{ width: `${Math.round(brightness * 100)}%` }} />
             </div>
@@ -766,13 +773,13 @@ export default function App() {
           </div>
         )}
 
-        {/* Top Ribbon */}
+        {/* Reader Topbar */}
         <header className="reader-topbar">
           <button className="icon-btn" onClick={closeBook} aria-label="Back to library">
             <ChevronLeft />
           </button>
           <div className="reader-book-title">
-            <span className="eyebrow">NOW READING</span>
+            <span className="eyebrow" style={{ fontSize: 9, letterSpacing: 1.2, color: '#8a8d83' }}>NOW READING</span>
             <strong>{active.title}</strong>
           </div>
           <div className="reader-actions">
@@ -851,22 +858,30 @@ export default function App() {
                     />
                   </div>
                 ) : (
-                  Array.from({ length: pageCount || 1 }, (_, i) => i + 1).map(p => (
-                    <div
-                      key={p}
-                      id={`folio-page-${p}`}
-                      data-page-number={p}
-                      className="pdf-page-wrap"
-                    >
-                      <Page
-                        pageNumber={p}
-                        scale={zoom}
-                        renderTextLayer
-                        renderAnnotationLayer={false}
-                        loading={<div className="page-skeleton" />}
-                      />
-                    </div>
-                  ))
+                  Array.from({ length: pageCount || 1 }, (_, i) => i + 1).map(p => {
+                    // Windowed rendering in continuous scroll to keep memory small & zoom fast
+                    const isNear = pageCount <= 12 || Math.abs(p - page) <= 3;
+                    return (
+                      <div
+                        key={p}
+                        id={`folio-page-${p}`}
+                        data-page-number={p}
+                        className="pdf-page-wrap"
+                      >
+                        {isNear ? (
+                          <Page
+                            pageNumber={p}
+                            scale={zoom}
+                            renderTextLayer
+                            renderAnnotationLayer={false}
+                            loading={<div className="page-skeleton" />}
+                          />
+                        ) : (
+                          <div style={{ width: `${Math.min(window.innerWidth - 32, 600 * zoom)}px`, height: `${850 * zoom}px` }} />
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </Document>
             </div>
@@ -876,7 +891,7 @@ export default function App() {
             <aside className="reader-sidepanel">
               <div className="panel-head">
                 <div>
-                  <span className="eyebrow">YOUR BOOK</span>
+                  <span className="eyebrow" style={{ fontSize: 9, letterSpacing: 1.2, color: '#8a8d83' }}>YOUR BOOK</span>
                   <h3>{showNotes ? 'Highlights & notes' : 'Navigate'}</h3>
                 </div>
                 <button className="icon-btn" onClick={() => { setShowNotes(false); setShowContents(false); }}>
@@ -927,8 +942,8 @@ export default function App() {
                           />
                         ))}
                       </div>
-                      <button className="primary-btn small" onClick={saveNote} disabled={!selectedText.trim() && !noteDraft.trim()}>
-                        <Highlighter size={15} /> Save
+                      <button className="primary-btn" style={{ padding: '7px 12px', fontSize: 11 }} onClick={saveNote} disabled={!selectedText.trim() && !noteDraft.trim()}>
+                        <Highlighter size={14} /> Save
                       </button>
                     </div>
                   </div>
@@ -959,7 +974,7 @@ export default function App() {
           )}
         </main>
 
-        {/* Fixed Stationary Page Navigation & Zoom Bar */}
+        {/* Stationary Floating Page Controls */}
         <div className="page-controls" onClick={e => e.stopPropagation()}>
           <button
             className="icon-btn"
@@ -1011,7 +1026,7 @@ export default function App() {
     );
   }
 
-  // Library View
+  // Minimal Clean Library View
   const continueBooks = [...books].filter(b => b.progress > 0 && b.progress < 100).sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)).slice(0, 3);
   const noteBook = (id: string) => books.find(b => b.id === id)?.title ?? 'Book no longer in library';
 
@@ -1019,29 +1034,22 @@ export default function App() {
     <div className="app theme-paper library-app">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark"><BookOpen size={21} /></div>
+          <div className="brand-mark"><BookOpen size={20} /></div>
           <span>folio<span className="brand-period">.</span></span>
         </div>
         <div className="side-label">YOUR SPACE</div>
         <button className={`nav-item ${tab === 'library' ? 'active' : ''}`} onClick={() => setTab('library')}>
-          <LibraryBig size={18} /> Library <span className="nav-count">{books.length}</span>
+          <LibraryBig size={17} /> Library <span className="nav-count">{books.length}</span>
         </button>
         <button className={`nav-item ${tab === 'notes' ? 'active' : ''}`} onClick={() => setTab('notes')}>
-          <NotebookPen size={18} /> Notebook <span className="nav-count">{notes.length}</span>
+          <NotebookPen size={17} /> Notebook <span className="nav-count">{notes.length}</span>
         </button>
         <div className="sidebar-bottom">
-          <div className="storage-card">
-            <div className="storage-icon"><Files size={17} /></div>
-            <div>
-              <strong>Your library, your device</strong>
-              <p>Books and notes stay in this browser.</p>
-            </div>
-          </div>
           <button className="nav-item settings-nav" onClick={exportBackup}>
-            <Download size={17} /> Export backup
+            <Download size={16} /> Export backup
           </button>
           <button className="nav-item settings-nav" onClick={exportNotes}>
-            <NotebookPen size={17} /> Export notes
+            <NotebookPen size={16} /> Export notes
           </button>
         </div>
       </aside>
@@ -1049,10 +1057,10 @@ export default function App() {
       <main className="library-main">
         <header className="library-topbar">
           <div className="mobile-brand">
-            <div className="brand-mark"><BookOpen size={19} /></div>
+            <div className="brand-mark"><BookOpen size={18} /></div>
             <span>folio<span className="brand-period">.</span></span>
           </div>
-          <div className="breadcrumbs">Personal library <span>/</span> <b>{tab === 'library' ? 'All books' : 'Notebook'}</b></div>
+          <div className="breadcrumbs">Personal library / <b>{tab === 'library' ? 'Books' : 'Notebook'}</b></div>
           <div className="topbar-right">
             <span className="offline-chip"><span className="status-dot" /> Offline ready</span>
             <button className="avatar-button" title="Local library">F</button>
@@ -1061,124 +1069,112 @@ export default function App() {
 
         {tab === 'library' ? (
           <div className="library-content">
-            <section className="welcome-row">
-              <div>
-                <div className="eyebrow">YOUR PERSONAL READING SPACE</div>
-                <h1>A little more room<br className="desktop-break" /> to <em>think.</em></h1>
-                <p className="welcome-copy">All your books, one calm place. Pick up where you left off.</p>
+            {/* Minimal Clean Header with Quick Controls */}
+            <div className="library-header-row">
+              <div className="library-title-group">
+                <h1>Library</h1>
+                <span className="count-badge">{books.length}</span>
               </div>
-              <button className="primary-btn import-btn" onClick={() => inputRef.current?.click()} disabled={importing}>
-                <FilePlus2 size={18} />{importing ? 'Importing…' : 'Import books'}
-              </button>
-              <input ref={inputRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={e => e.target.files && void importFiles(e.target.files)} />
-            </section>
 
-            {continueBooks.length > 0 && (
-              <section className="continue-section">
-                <div className="section-heading">
-                  <div>
-                    <h2>Pick up where you left off</h2>
-                    <p>A good book is always waiting.</p>
-                  </div>
+              <div className="library-actions-group">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input placeholder="Search library" value={query} onChange={e => setQuery(e.target.value)} />
+                  {query && <button onClick={() => setQuery('')}><X size={14} /></button>}
                 </div>
+                <label className="sort-select">
+                  <ListFilter size={15} />
+                  <select value={sort} onChange={e => setSort(e.target.value as typeof sort)} aria-label="Sort books">
+                    <option value="recent">Recent</option>
+                    <option value="added">Added</option>
+                    <option value="title">A–Z</option>
+                  </select>
+                </label>
+                <button className="primary-btn" onClick={() => inputRef.current?.click()} disabled={importing}>
+                  <FilePlus2 size={16} />
+                  <span>{importing ? 'Importing…' : 'Import'}</span>
+                </button>
+                <input ref={inputRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={e => e.target.files && void importFiles(e.target.files)} />
+              </div>
+            </div>
+
+            {/* Compact In-Progress Shelf */}
+            {continueBooks.length > 0 && !query && (
+              <section className="continue-shelf">
+                <div className="shelf-label">CONTINUE READING</div>
                 <div className="continue-grid">
                   {continueBooks.map(b => (
                     <button className="continue-card" key={b.id} onClick={() => void openBook(b)}>
                       <div className="mini-cover" style={{ background: b.coverColor }}>
-                        <BookOpen size={23} />
-                        <span>FOLIO EDITION</span>
+                        <BookOpen size={20} />
+                        <span>FOLIO</span>
                       </div>
                       <div className="continue-info">
                         <strong>{b.title}</strong>
                         <span>Page {b.lastPage}{b.pageCount ? ` of ${b.pageCount}` : ''}</span>
                         <div className="progress-track"><span style={{ width: `${b.progress}%` }} /></div>
                       </div>
-                      <ChevronRight size={17} />
+                      <ChevronRight size={16} />
                     </button>
                   ))}
                 </div>
               </section>
             )}
 
-            <section className="library-section">
-              <div className="section-heading library-heading">
-                <div>
-                  <h2>Your library <span className="count-badge">{books.length}</span></h2>
-                  <p>Make time for what matters.</p>
-                </div>
-                <div className="library-tools">
-                  <div className="search-box">
-                    <Search size={17} />
-                    <input placeholder="Search your library" value={query} onChange={e => setQuery(e.target.value)} />
-                    {query && <button onClick={() => setQuery('')}><X size={14} /></button>}
-                  </div>
-                  <label className="sort-select">
-                    <ListFilter size={16} />
-                    <select value={sort} onChange={e => setSort(e.target.value as typeof sort)} aria-label="Sort books">
-                      <option value="recent">Recently opened</option>
-                      <option value="added">Recently added</option>
-                      <option value="title">Title A–Z</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-
-              {visibleBooks.length ? (
-                <div className="book-grid">
-                  {visibleBooks.map(b => (
-                    <article className="book-card" key={b.id}>
-                      <button className="book-cover-button" onClick={() => void openBook(b)} aria-label={`Open ${b.title}`}>
-                        <div className="book-cover" style={{ background: b.coverColor }}>
-                          <div className="cover-topline">FOLIO · YOUR LIBRARY</div>
-                          <BookOpen size={26} strokeWidth={1.4} />
-                          <div className="cover-title">{b.title}</div>
-                          <div className="cover-bottomline">PDF EDITION</div>
-                        </div>
-                        <span className="book-open-hint">Open book <ChevronRight size={14} /></span>
-                      </button>
-                      <div className="book-meta">
-                        <div className="book-title-row">
-                          <button onClick={() => void openBook(b)} className="book-title">{b.title}</button>
-                          <button className="mini-icon" onClick={() => void deleteBook(b)} aria-label={`Remove ${b.title}`}>
-                            <MoreHorizontal size={17} />
-                          </button>
-                        </div>
-                        <span className="book-subtitle">PDF · {fmtSize(b.size)}</span>
-                        <div className="book-progress-row">
-                          <div className="progress-track"><span style={{ width: `${b.progress}%` }} /></div>
-                          <span>{b.progress}%</span>
-                        </div>
+            {/* Direct Book Grid */}
+            {visibleBooks.length ? (
+              <div className="book-grid">
+                {visibleBooks.map(b => (
+                  <article className="book-card" key={b.id}>
+                    <button className="book-cover-button" onClick={() => void openBook(b)} aria-label={`Open ${b.title}`}>
+                      <div className="book-cover" style={{ background: b.coverColor }}>
+                        <div className="cover-topline">FOLIO · PDF</div>
+                        <BookOpen size={24} strokeWidth={1.4} />
+                        <div className="cover-title">{b.title}</div>
+                        <div className="cover-bottomline">{fmtSize(b.size)}</div>
                       </div>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-library">
-                  <div className="empty-illustration"><BookOpen size={30} /></div>
-                  <h3>{query ? 'No books found' : 'Your library starts here'}</h3>
-                  <p>{query ? 'Try a different title or clear your search.' : 'Bring your PDFs into a calmer reading space. Your files stay on this device.'}</p>
-                  {!query && (
-                    <button className="primary-btn" onClick={() => inputRef.current?.click()}>
-                      <Upload size={17} /> Import your first book
                     </button>
-                  )}
-                </div>
-              )}
-            </section>
+                    <div className="book-meta">
+                      <div className="book-title-row">
+                        <button onClick={() => void openBook(b)} className="book-title">{b.title}</button>
+                        <button className="mini-icon" onClick={() => void deleteBook(b)} aria-label={`Remove ${b.title}`}>
+                          <MoreHorizontal size={16} />
+                        </button>
+                      </div>
+                      <div className="book-progress-row">
+                        <div className="progress-track"><span style={{ width: `${b.progress}%` }} /></div>
+                        <span>{b.progress}%</span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-library">
+                <div className="empty-illustration"><BookOpen size={26} /></div>
+                <h3>{query ? 'No books found' : 'Your library is empty'}</h3>
+                <p>{query ? 'Try a different search query.' : 'Add your PDF files to start reading offline.'}</p>
+                {!query && (
+                  <button className="primary-btn" onClick={() => inputRef.current?.click()}>
+                    <Upload size={16} /> Import PDF
+                  </button>
+                )}
+              </div>
+            )}
+
             <footer className="library-footer">
-              <span>Made for slower, deeper reading.</span>
-              <span>{books.length} books · {notes.length} saved notes</span>
+              <span>Folio Reader</span>
+              <span>{books.length} books · {notes.length} notes</span>
             </footer>
           </div>
         ) : (
           <div className="notebook-content">
-            <div className="eyebrow">YOUR IDEAS, KEPT CLOSE</div>
-            <h1>Notebook<span className="brand-period">.</span></h1>
-            <p className="welcome-copy">Highlights and notes from across your reading.</p>
+            <h1>Notebook</h1>
+            <p className="welcome-copy">Highlights and notes from your reading.</p>
             <div className="notebook-toolbar">
               <span>{notes.length} saved items</span>
               <button className="secondary-btn" onClick={exportNotes} disabled={!notes.length}>
-                <Download size={16} /> Export notes
+                <Download size={15} /> Export notes
               </button>
             </div>
             {notes.length ? (
@@ -1196,7 +1192,7 @@ export default function App() {
                             if (b) void openBook(b).then(() => { setShowNotes(true); setTimeout(() => jump(n.page), 150); });
                           }}
                         >
-                          Page {n.page} <ChevronRight size={14} />
+                          Page {n.page} <ChevronRight size={13} />
                         </button>
                       </div>
                       {n.text && <blockquote>{n.text}</blockquote>}
@@ -1208,17 +1204,16 @@ export default function App() {
                       onClick={async () => { await db.notes.delete(n.id); await refresh(); }}
                       aria-label="Delete note"
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
                   </article>
                 ))}
               </div>
             ) : (
-              <div className="empty-library notebook-empty">
-                <div className="empty-illustration"><Highlighter size={28} /></div>
-                <h3>Your ideas will live here</h3>
-                <p>Open a PDF, select a passage, and save a highlight or note. They will collect here across all your books.</p>
-                <button className="secondary-btn" onClick={() => setTab('library')}>Go to library <ChevronRight size={16} /></button>
+              <div className="empty-library">
+                <div className="empty-illustration"><Highlighter size={26} /></div>
+                <h3>Your notes will appear here</h3>
+                <p>Select text inside any PDF to save highlights and personal notes.</p>
               </div>
             )}
           </div>
@@ -1227,13 +1222,13 @@ export default function App() {
 
       <nav className="mobile-nav">
         <button className={tab === 'library' ? 'active' : ''} onClick={() => setTab('library')}>
-          <LibraryBig size={19} /><span>Library</span>
+          <LibraryBig size={18} /><span>Library</span>
         </button>
         <button className={tab === 'notes' ? 'active' : ''} onClick={() => setTab('notes')}>
-          <NotebookPen size={19} /><span>Notebook</span>
+          <NotebookPen size={18} /><span>Notebook</span>
         </button>
         <button onClick={() => inputRef.current?.click()}>
-          <FilePlus2 size={19} /><span>Import</span>
+          <FilePlus2 size={18} /><span>Import</span>
         </button>
       </nav>
 
