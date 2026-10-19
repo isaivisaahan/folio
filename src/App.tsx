@@ -4,12 +4,29 @@ import {
   BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2, Files,
   Highlighter, LibraryBig, ListFilter, Maximize2, Minimize2, Moon,
   MoreHorizontal, NotebookPen, Search, Sun, Trash2, Upload, X, ZoomIn, ZoomOut,
-  Download, Rows3, FileText, Eye, EyeOff
+  Download, Rows3, FileText, Eye, EyeOff, BookA, Copy, Volume2, Loader2
 } from 'lucide-react';
 import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './db';
 
 type Theme = 'paper' | 'sepia' | 'night';
 type ScrollMode = 'single' | 'continuous';
+
+interface DictDefinition {
+  definition: string;
+  example?: string;
+}
+
+interface DictMeaning {
+  partOfSpeech: string;
+  definitions: DictDefinition[];
+}
+
+interface DictResult {
+  word: string;
+  phonetic?: string;
+  audio?: string;
+  meanings: DictMeaning[];
+}
 
 const coverColors = ['#d7e1d5', '#ead8c5', '#d7dce8', '#e8d5d7', '#d9e2e5', '#e9e3cb'];
 const fmtSize = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -47,6 +64,13 @@ export default function App() {
   const [brightness, setBrightness] = useState<number>(1.0);
   const [showBrightnessHud, setShowBrightnessHud] = useState<boolean>(false);
   const hudTimerRef = useRef<number | null>(null);
+
+  // Selection Popover & Dictionary states
+  const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null);
+  const [dictWord, setDictWord] = useState('');
+  const [dictResult, setDictResult] = useState<DictResult | null>(null);
+  const [dictLoading, setDictLoading] = useState(false);
+  const [showDictModal, setShowDictModal] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const readerRef = useRef<HTMLDivElement>(null);
@@ -159,6 +183,7 @@ export default function App() {
     setPageCount(book.pageCount || 0);
     setZoom(1);
     setSelectedText('');
+    setPopoverPos(null);
     setShowNotes(false);
     setShowContents(false);
     setFocusMode(false);
@@ -171,6 +196,7 @@ export default function App() {
     if (document.fullscreenElement) void document.exitFullscreen();
     setActive(null);
     setSelectedText('');
+    setPopoverPos(null);
     setFocusMode(false);
     void refresh();
   };
@@ -193,6 +219,7 @@ export default function App() {
     if (next === page) return;
 
     setTurnDirection(dir);
+    setPopoverPos(null);
     window.setTimeout(() => {
       setPage(next);
       void updateProgress(next, pageCount);
@@ -205,6 +232,7 @@ export default function App() {
     const next = Math.min(Math.max(1, p), pageCount || 1);
     setPage(next);
     void updateProgress(next, pageCount);
+    setPopoverPos(null);
 
     if (scrollMode === 'continuous') {
       const el = document.getElementById(`folio-page-${next}`);
@@ -214,21 +242,35 @@ export default function App() {
     }
   };
 
+  // Focus Mode toggle helper
+  const toggleFocusMode = () => {
+    setFocusMode(prev => {
+      const next = !prev;
+      if (next) setToast('Focus mode on · Tap screen or top button to show controls');
+      return next;
+    });
+    if (showNotes || showContents) {
+      setShowNotes(false);
+      setShowContents(false);
+    }
+  };
+
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!active || showNotes) return;
+      if (!active || showNotes || showDictModal) return;
       if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         if (!pageCount || page < pageCount) animatedCurlJump(page + 1, 'next');
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         if (page > 1) animatedCurlJump(page - 1, 'prev');
-      } else if (e.key === 'Escape' && focusMode) {
-        setFocusMode(false);
+      } else if (e.key === 'Escape') {
+        if (showDictModal) setShowDictModal(false);
+        else if (focusMode) setFocusMode(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, page, pageCount, showNotes, scrollMode, focusMode]);
+  }, [active, page, pageCount, showNotes, scrollMode, focusMode, showDictModal]);
 
   const toggleFullscreen = async () => {
     try {
@@ -243,13 +285,99 @@ export default function App() {
   };
 
   // =========================================================================
-  // TABLET TOUCH ENGINE:
-  // 1 Finger: Native vertical scroll & 1-tap hide/show
-  // 2 Fingers: Zoom & Brightness ONLY
+  // TEXT SELECTION & CONTEXTUAL ACTION BAR
+  // =========================================================================
+  const checkSelection = () => {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? '';
+    if (!text || sel?.rangeCount === 0) {
+      setPopoverPos(null);
+      return;
+    }
+
+    setSelectedText(text.slice(0, 4000));
+    try {
+      const range = sel!.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (rect.width || rect.height) {
+        const x = Math.max(130, Math.min(window.innerWidth - 130, rect.left + rect.width / 2));
+        const y = Math.max(70, rect.top - 12);
+        setPopoverPos({ x, y });
+      }
+    } catch {
+      setPopoverPos(null);
+    }
+  };
+
+  // 1-Tap Quick Highlight from popover
+  const quickHighlight = async (color: string) => {
+    if (!active || !selectedText.trim()) return;
+    await db.notes.add({
+      id: makeId(),
+      bookId: active.id,
+      page,
+      text: selectedText.trim(),
+      note: '',
+      color,
+      createdAt: Date.now()
+    });
+    setPopoverPos(null);
+    window.getSelection()?.removeAllRanges();
+    await refresh();
+    setToast('Highlight saved.');
+  };
+
+  // Lookup word in Dictionary API
+  const lookupDictionary = async () => {
+    const rawWord = selectedText.trim().split(/\s+/)[0].replace(/[^a-zA-Z-]/g, '').toLowerCase();
+    if (!rawWord) {
+      setToast('Select a word to look up its definition.');
+      return;
+    }
+
+    setDictWord(rawWord);
+    setDictLoading(true);
+    setShowDictModal(true);
+    setPopoverPos(null);
+
+    try {
+      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(rawWord)}`);
+      if (!res.ok) throw new Error('Word not found');
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const item = data[0];
+        const phonetic = item.phonetic || item.phonetics?.find((p: any) => p.text)?.text;
+        const audio = item.phonetics?.find((p: any) => p.audio && p.audio.trim().length > 0)?.audio;
+        setDictResult({
+          word: item.word || rawWord,
+          phonetic,
+          audio,
+          meanings: item.meanings || []
+        });
+      } else {
+        setDictResult(null);
+      }
+    } catch {
+      setDictResult(null);
+    } finally {
+      setDictLoading(false);
+    }
+  };
+
+  const copySelectedText = () => {
+    if (selectedText) {
+      navigator.clipboard.writeText(selectedText);
+      setToast('Copied to clipboard.');
+      setPopoverPos(null);
+      window.getSelection()?.removeAllRanges();
+    }
+  };
+
+  // =========================================================================
+  // TABLET TOUCH ENGINE
   // =========================================================================
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
-      // 1-Finger touch start: Track for 1-Tap Toggle
       const t = e.touches[0];
       singleTapRef.current = {
         x: t.clientX,
@@ -259,7 +387,6 @@ export default function App() {
       };
       twoFingerRef.current.active = 'none';
     } else if (e.touches.length === 2) {
-      // 2-Finger touch start: Prepare Zoom or Brightness
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -278,17 +405,15 @@ export default function App() {
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
-      // 1-Finger move: Let browser scroll naturally, mark as moved so tap won't fire
       const t = e.touches[0];
       const dx = Math.abs(t.clientX - singleTapRef.current.x);
       const dy = Math.abs(t.clientY - singleTapRef.current.y);
-      if (dx > 8 || dy > 8) {
+      if (dx > 12 || dy > 12) {
         singleTapRef.current.hasMoved = true;
       }
       return;
     }
 
-    // 2-Fingers move: ONLY Zoom & Brightness
     if (e.touches.length === 2) {
       const t1 = e.touches[0];
       const t2 = e.touches[1];
@@ -298,7 +423,6 @@ export default function App() {
       const deltaDist = currentDist - twoFingerRef.current.startDist;
       const deltaY = currentCenterY - twoFingerRef.current.startCenterY;
 
-      // Determine intent between Zoom and Brightness
       if (twoFingerRef.current.active === 'deciding') {
         if (Math.abs(deltaDist) > 18) {
           twoFingerRef.current.active = 'pinch';
@@ -330,19 +454,15 @@ export default function App() {
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    // Check for 1-Tap Focus Toggle
+    // 1-Tap Toggle check
     if (e.changedTouches.length === 1 && !singleTapRef.current.hasMoved) {
       const dt = Date.now() - singleTapRef.current.time;
-      if (dt < 320) {
+      if (dt < 380) {
         const selection = window.getSelection()?.toString().trim();
         if (!selection) {
           const target = e.target as HTMLElement;
-          if (!target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer')) {
-            setFocusMode(prev => !prev);
-            if (showNotes || showContents) {
-              setShowNotes(false);
-              setShowContents(false);
-            }
+          if (!target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer, .selection-popover, .dictionary-card')) {
+            toggleFocusMode();
           }
         }
       }
@@ -362,25 +482,23 @@ export default function App() {
     }
 
     twoFingerRef.current.active = 'none';
+    window.setTimeout(checkSelection, 60);
   };
 
-  // Mouse click tap toggle for desktop/laptop
   const handleStageClick = (e: React.MouseEvent) => {
     const selection = window.getSelection()?.toString().trim();
-    if (selection) return;
-
-    const target = e.target as HTMLElement;
-    if (target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer')) {
+    if (selection) {
+      checkSelection();
       return;
     }
-    setFocusMode(prev => !prev);
-    if (showNotes || showContents) {
-      setShowNotes(false);
-      setShowContents(false);
+
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer, .selection-popover, .dictionary-card')) {
+      return;
     }
+    toggleFocusMode();
   };
 
-  // Trackpad pinch-to-zoom (Ctrl + Wheel)
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey) {
       e.preventDefault();
@@ -434,6 +552,7 @@ export default function App() {
     });
     setSelectedText('');
     setNoteDraft('');
+    setPopoverPos(null);
     await refresh();
     setToast('Highlight and note saved.');
   };
@@ -499,6 +618,143 @@ export default function App() {
           style={{ opacity: Math.max(0, 1 - brightness) }}
         />
 
+        {/* Floating "Show Controls" Pill When in Focus Mode */}
+        {focusMode && (
+          <button
+            className="focus-exit-pill"
+            onClick={() => setFocusMode(false)}
+            aria-label="Show reader controls"
+          >
+            <Eye size={13} />
+            <span>Show controls</span>
+          </button>
+        )}
+
+        {/* Floating Contextual Text Selection Bar */}
+        {popoverPos && (
+          <div
+            className="selection-popover"
+            style={{ left: `${popoverPos.x}px`, top: `${popoverPos.y}px` }}
+            onClick={e => e.stopPropagation()}
+          >
+            <button className="popover-btn" onClick={lookupDictionary} title="Look up definition">
+              <BookA size={14} />
+              <span>Define</span>
+            </button>
+            <span className="popover-divider" />
+            <div className="popover-colors">
+              {['#f6d978', '#b9d9f5', '#bfe2c2', '#f1bfd1'].map(c => (
+                <button
+                  key={c}
+                  className="popover-color-dot"
+                  style={{ background: c }}
+                  onClick={() => void quickHighlight(c)}
+                  title={`Highlight in ${c}`}
+                />
+              ))}
+            </div>
+            <span className="popover-divider" />
+            <button
+              className="popover-btn"
+              onClick={() => {
+                setShowNotes(true);
+                setPopoverPos(null);
+              }}
+              title="Add a custom note"
+            >
+              <NotebookPen size={14} />
+              <span>Note</span>
+            </button>
+            <button className="popover-btn" onClick={copySelectedText} title="Copy selected text">
+              <Copy size={14} />
+            </button>
+            <button className="popover-btn" onClick={() => setPopoverPos(null)} title="Dismiss">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Dictionary Meaning Modal */}
+        {showDictModal && (
+          <div className="dictionary-backdrop" onClick={() => setShowDictModal(false)}>
+            <div className="dictionary-card" onClick={e => e.stopPropagation()}>
+              <div className="dict-header">
+                <div className="dict-word-row">
+                  <h3>{dictResult?.word || dictWord}</h3>
+                  {dictResult?.phonetic && <span className="dict-phonetic">{dictResult.phonetic}</span>}
+                  {dictResult?.audio && (
+                    <button
+                      className="dict-audio-btn"
+                      onClick={() => {
+                        const audioUrl = dictResult.audio!.startsWith('//')
+                          ? `https:${dictResult.audio}`
+                          : dictResult.audio!;
+                        new Audio(audioUrl).play();
+                      }}
+                      title="Play pronunciation"
+                    >
+                      <Volume2 size={16} />
+                    </button>
+                  )}
+                </div>
+                <button className="icon-btn" onClick={() => setShowDictModal(false)}>
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="dict-body">
+                {dictLoading ? (
+                  <div className="loading-state" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <Loader2 size={18} className="spin-icon" />
+                    <span>Searching dictionary…</span>
+                  </div>
+                ) : dictResult && dictResult.meanings.length > 0 ? (
+                  dictResult.meanings.map((m, idx) => (
+                    <div className="dict-meaning-block" key={idx}>
+                      <span className="dict-part-of-speech">{m.partOfSpeech.toUpperCase()}</span>
+                      <ol className="dict-definitions-list">
+                        {m.definitions.slice(0, 3).map((d, dIdx) => (
+                          <li className="dict-definition-item" key={dIdx}>
+                            <span>{d.definition}</span>
+                            {d.example && <span className="dict-example">“{d.example}”</span>}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  ))
+                ) : (
+                  <div className="empty-small" style={{ padding: '20px 0', textAlign: 'center' }}>
+                    <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 600 }}>No exact definition found for “{dictWord}”.</p>
+                    <p style={{ margin: 0, fontSize: 12, color: '#888' }}>
+                      Make sure you selected a single root word and you are connected to the internet.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="dict-footer">
+                <button
+                  className="secondary-btn"
+                  style={{ padding: '7px 12px', fontSize: 11 }}
+                  onClick={() => {
+                    void quickHighlight('#f6d978');
+                    setShowDictModal(false);
+                  }}
+                >
+                  <Highlighter size={13} />
+                  <span>Highlight word</span>
+                </button>
+                <button
+                  className="primary-btn small"
+                  onClick={() => setShowDictModal(false)}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Floating Brightness HUD */}
         {showBrightnessHud && (
           <div className="brightness-hud">
@@ -529,7 +785,7 @@ export default function App() {
             </button>
             <button
               className={`icon-btn ${focusMode ? 'active-mode' : ''}`}
-              onClick={() => setFocusMode(!focusMode)}
+              onClick={toggleFocusMode}
               title={focusMode ? 'Exit Focus Mode' : 'Focus Mode (Hide bars)'}
             >
               {focusMode ? <EyeOff /> : <Eye />}
@@ -564,6 +820,7 @@ export default function App() {
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
+            onMouseUp={() => window.setTimeout(checkSelection, 40)}
             onWheel={handleWheel}
           >
             {loading && <div className="loading-state">Opening your book…</div>}
@@ -583,13 +840,7 @@ export default function App() {
                 loading={<div className="loading-state">Preparing pages…</div>}
               >
                 {scrollMode === 'single' ? (
-                  <div
-                    className={`pdf-page-wrap ${turnDirection ? `turning-${turnDirection}` : ''}`}
-                    onMouseUp={() => {
-                      const text = window.getSelection()?.toString().trim() ?? '';
-                      if (text) setSelectedText(text.slice(0, 4000));
-                    }}
-                  >
+                  <div className={`pdf-page-wrap ${turnDirection ? `turning-${turnDirection}` : ''}`}>
                     <div className="curl-fold-overlay" />
                     <Page
                       pageNumber={page}
@@ -606,10 +857,6 @@ export default function App() {
                       id={`folio-page-${p}`}
                       data-page-number={p}
                       className="pdf-page-wrap"
-                      onMouseUp={() => {
-                        const text = window.getSelection()?.toString().trim() ?? '';
-                        if (text) setSelectedText(text.slice(0, 4000));
-                      }}
                     >
                       <Page
                         pageNumber={p}
@@ -712,7 +959,7 @@ export default function App() {
           )}
         </main>
 
-        {/* Fixed Stationary Page Navigation & Zoom Bar (Completely Immune to Scrolling) */}
+        {/* Fixed Stationary Page Navigation & Zoom Bar */}
         <div className="page-controls" onClick={e => e.stopPropagation()}>
           <button
             className="icon-btn"
