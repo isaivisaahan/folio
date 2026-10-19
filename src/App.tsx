@@ -4,13 +4,12 @@ import {
   BookOpen, Bookmark, Check, ChevronLeft, ChevronRight, FilePlus2, Files,
   Highlighter, LibraryBig, ListFilter, Maximize2, Minimize2, Moon,
   MoreHorizontal, NotebookPen, Search, Sun, Trash2, Upload, X, ZoomIn, ZoomOut,
-  Download, Rows3, FileText
+  Download, Rows3, FileText, Eye, EyeOff
 } from 'lucide-react';
 import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './db';
 
 type Theme = 'paper' | 'sepia' | 'night';
 type ScrollMode = 'single' | 'continuous';
-type GestureType = 'none' | 'deciding' | 'pinch' | 'turn' | 'brightness';
 
 const coverColors = ['#d7e1d5', '#ead8c5', '#d7dce8', '#e8d5d7', '#d9e2e5', '#e9e3cb'];
 const fmtSize = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -27,6 +26,7 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>('paper');
   const [scrollMode, setScrollMode] = useState<ScrollMode>('single');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'library' | 'notes'>('library');
   const [bookmarks, setBookmarks] = useState<BookMark[]>([]);
@@ -42,7 +42,7 @@ export default function App() {
   const [sort, setSort] = useState<'recent' | 'title' | 'added'>('recent');
   const [importing, setImporting] = useState(false);
 
-  // Animation & brightness states
+  // Curl Turn & Brightness states
   const [turnDirection, setTurnDirection] = useState<'next' | 'prev' | null>(null);
   const [brightness, setBrightness] = useState<number>(1.0);
   const [showBrightnessHud, setShowBrightnessHud] = useState<boolean>(false);
@@ -51,25 +51,27 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const readerRef = useRef<HTMLDivElement>(null);
   const transformLayerRef = useRef<HTMLDivElement>(null);
-  const singlePageWrapRef = useRef<HTMLDivElement>(null);
 
-  // Multi-touch Gesture tracking
-  const gestureRef = useRef<{
-    type: GestureType;
+  // Tablet 1-Tap & 2-Finger Tracking Refs
+  const singleTapRef = useRef<{ x: number; y: number; time: number; hasMoved: boolean }>({
+    x: 0,
+    y: 0,
+    time: 0,
+    hasMoved: false
+  });
+
+  const twoFingerRef = useRef<{
+    active: 'none' | 'deciding' | 'pinch' | 'brightness';
     startDist: number;
-    startCenterX: number;
     startCenterY: number;
     startZoom: number;
     startBrightness: number;
-    currentDeltaX: number;
   }>({
-    type: 'none',
+    active: 'none',
     startDist: 0,
-    startCenterX: 0,
     startCenterY: 0,
     startZoom: 1,
-    startBrightness: 1,
-    currentDeltaX: 0
+    startBrightness: 1
   });
 
   const refresh = async () => {
@@ -159,6 +161,7 @@ export default function App() {
     setSelectedText('');
     setShowNotes(false);
     setShowContents(false);
+    setFocusMode(false);
     await db.books.update(book.id, { lastOpened: Date.now() });
     await refresh();
     setLoading(false);
@@ -168,6 +171,7 @@ export default function App() {
     if (document.fullscreenElement) void document.exitFullscreen();
     setActive(null);
     setSelectedText('');
+    setFocusMode(false);
     void refresh();
   };
 
@@ -179,8 +183,8 @@ export default function App() {
     setBooks(prev => prev.map(b => b.id === active.id ? { ...b, lastPage: p, pageCount: total || b.pageCount, progress, lastOpened: Date.now() } : b));
   };
 
-  // Animated Page Turn
-  const animatedJump = (targetPage: number, dir: 'next' | 'prev') => {
+  // 3D Page Curl Turn on Navigation
+  const animatedCurlJump = (targetPage: number, dir: 'next' | 'prev') => {
     if (scrollMode === 'continuous') {
       jump(targetPage);
       return;
@@ -193,7 +197,8 @@ export default function App() {
       setPage(next);
       void updateProgress(next, pageCount);
       setTurnDirection(null);
-    }, 280);
+      readerRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+    }, 320);
   };
 
   const jump = (p: number) => {
@@ -209,19 +214,21 @@ export default function App() {
     }
   };
 
-  // Keyboard Navigation with Page Turn Animation
+  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!active || showNotes) return;
       if (e.key === 'ArrowRight' || e.key === 'PageDown') {
-        if (!pageCount || page < pageCount) animatedJump(page + 1, 'next');
+        if (!pageCount || page < pageCount) animatedCurlJump(page + 1, 'next');
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-        if (page > 1) animatedJump(page - 1, 'prev');
+        if (page > 1) animatedCurlJump(page - 1, 'prev');
+      } else if (e.key === 'Escape' && focusMode) {
+        setFocusMode(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, page, pageCount, showNotes, scrollMode]);
+  }, [active, page, pageCount, showNotes, scrollMode, focusMode]);
 
   const toggleFullscreen = async () => {
     try {
@@ -236,117 +243,141 @@ export default function App() {
   };
 
   // =========================================================================
-  // MULTI-TOUCH 2-FINGER GESTURE ENGINE
+  // TABLET TOUCH ENGINE:
+  // 1 Finger: Native vertical scroll & 1-tap hide/show
+  // 2 Fingers: Zoom & Brightness ONLY
   // =========================================================================
   const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 2) {
+    if (e.touches.length === 1) {
+      // 1-Finger touch start: Track for 1-Tap Toggle
+      const t = e.touches[0];
+      singleTapRef.current = {
+        x: t.clientX,
+        y: t.clientY,
+        time: Date.now(),
+        hasMoved: false
+      };
+      twoFingerRef.current.active = 'none';
+    } else if (e.touches.length === 2) {
+      // 2-Finger touch start: Prepare Zoom or Brightness
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const centerX = (t1.clientX + t2.clientX) / 2;
       const centerY = (t1.clientY + t2.clientY) / 2;
 
-      gestureRef.current = {
-        type: 'deciding',
+      twoFingerRef.current = {
+        active: 'deciding',
         startDist: dist,
-        startCenterX: centerX,
         startCenterY: centerY,
         startZoom: zoom,
-        startBrightness: brightness,
-        currentDeltaX: 0
+        startBrightness: brightness
       };
+      singleTapRef.current.hasMoved = true;
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length !== 2) return;
-    const t1 = e.touches[0];
-    const t2 = e.touches[1];
-    const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-    const currentCenterX = (t1.clientX + t2.clientX) / 2;
-    const currentCenterY = (t1.clientY + t2.clientY) / 2;
-
-    const deltaDist = currentDist - gestureRef.current.startDist;
-    const deltaX = currentCenterX - gestureRef.current.startCenterX;
-    const deltaY = currentCenterY - gestureRef.current.startCenterY;
-
-    // Determine Gesture Intent
-    if (gestureRef.current.type === 'deciding') {
-      if (Math.abs(deltaDist) > 22) {
-        gestureRef.current.type = 'pinch';
-      } else if (Math.abs(deltaY) > 20 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
-        gestureRef.current.type = 'brightness';
-      } else if (Math.abs(deltaX) > 20 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
-        gestureRef.current.type = 'turn';
+    if (e.touches.length === 1) {
+      // 1-Finger move: Let browser scroll naturally, mark as moved so tap won't fire
+      const t = e.touches[0];
+      const dx = Math.abs(t.clientX - singleTapRef.current.x);
+      const dy = Math.abs(t.clientY - singleTapRef.current.y);
+      if (dx > 8 || dy > 8) {
+        singleTapRef.current.hasMoved = true;
       }
+      return;
     }
 
-    // 1. PINCH-TO-ZOOM (Hardware-accelerated CSS GPU scaling)
-    if (gestureRef.current.type === 'pinch') {
-      const scaleRatio = currentDist / gestureRef.current.startDist;
-      if (transformLayerRef.current) {
-        transformLayerRef.current.style.transform = `scale(${scaleRatio})`;
-        transformLayerRef.current.style.transition = 'none';
+    // 2-Fingers move: ONLY Zoom & Brightness
+    if (e.touches.length === 2) {
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const currentCenterY = (t1.clientY + t2.clientY) / 2;
+
+      const deltaDist = currentDist - twoFingerRef.current.startDist;
+      const deltaY = currentCenterY - twoFingerRef.current.startCenterY;
+
+      // Determine intent between Zoom and Brightness
+      if (twoFingerRef.current.active === 'deciding') {
+        if (Math.abs(deltaDist) > 18) {
+          twoFingerRef.current.active = 'pinch';
+        } else if (Math.abs(deltaY) > 18) {
+          twoFingerRef.current.active = 'brightness';
+        }
       }
-    }
 
-    // 2. BRIGHTNESS CONTROL (2-Finger Vertical Swipe)
-    else if (gestureRef.current.type === 'brightness') {
-      const sensitivity = 0.0035;
-      const newBright = Math.min(1.0, Math.max(0.15, +(gestureRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
-      setBrightness(newBright);
-      setShowBrightnessHud(true);
+      // 1. PINCH ZOOM (GPU Transform)
+      if (twoFingerRef.current.active === 'pinch') {
+        const scaleRatio = currentDist / twoFingerRef.current.startDist;
+        if (transformLayerRef.current) {
+          transformLayerRef.current.style.transform = `scale(${scaleRatio})`;
+          transformLayerRef.current.style.transition = 'none';
+        }
+      }
 
-      if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
-      hudTimerRef.current = window.setTimeout(() => setShowBrightnessHud(false), 1400);
-    }
+      // 2. BRIGHTNESS (2-Finger Vertical Swipe)
+      else if (twoFingerRef.current.active === 'brightness') {
+        const sensitivity = 0.0035;
+        const newBright = Math.min(1.0, Math.max(0.15, +(twoFingerRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
+        setBrightness(newBright);
+        setShowBrightnessHud(true);
 
-    // 3. PAGE TURN SLIDE (2-Finger Horizontal Slide with 3D Page Curl)
-    else if (gestureRef.current.type === 'turn' && scrollMode === 'single') {
-      gestureRef.current.currentDeltaX = deltaX;
-      if (singlePageWrapRef.current) {
-        const turnAngle = Math.max(-55, Math.min(55, deltaX * 0.22));
-        const translateX = deltaX * 0.45;
-        singlePageWrapRef.current.style.transform = `perspective(1600px) rotateY(${turnAngle}deg) translateX(${translateX}px)`;
-        singlePageWrapRef.current.style.transition = 'none';
-        singlePageWrapRef.current.style.boxShadow = `${-deltaX * 0.15}px 12px 35px rgba(0,0,0,0.22)`;
+        if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
+        hudTimerRef.current = window.setTimeout(() => setShowBrightnessHud(false), 1400);
       }
     }
   };
 
-  const handleTouchEnd = () => {
-    const { type, startDist, startZoom, currentDeltaX } = gestureRef.current;
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    // Check for 1-Tap Focus Toggle
+    if (e.changedTouches.length === 1 && !singleTapRef.current.hasMoved) {
+      const dt = Date.now() - singleTapRef.current.time;
+      if (dt < 320) {
+        const selection = window.getSelection()?.toString().trim();
+        if (!selection) {
+          const target = e.target as HTMLElement;
+          if (!target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer')) {
+            setFocusMode(prev => !prev);
+            if (showNotes || showContents) {
+              setShowNotes(false);
+              setShowContents(false);
+            }
+          }
+        }
+      }
+    }
 
-    // Reset Pinch: Commit high-res PDF zoom smoothly once
-    if (type === 'pinch') {
+    // Commit 2-finger zoom
+    if (twoFingerRef.current.active === 'pinch') {
       if (transformLayerRef.current) {
         const matrix = new DOMMatrix(getComputedStyle(transformLayerRef.current).transform);
         const appliedScale = matrix.a || 1;
         transformLayerRef.current.style.transform = 'none';
         transformLayerRef.current.style.transition = 'none';
 
-        const finalZoom = Math.min(2.5, Math.max(0.6, +(startZoom * appliedScale).toFixed(2)));
+        const finalZoom = Math.min(2.5, Math.max(0.6, +(twoFingerRef.current.startZoom * appliedScale).toFixed(2)));
         setZoom(finalZoom);
       }
     }
 
-    // Reset Page Turn Slide: Determine if turn threshold was reached
-    if (type === 'turn' && scrollMode === 'single') {
-      if (singlePageWrapRef.current) {
-        singlePageWrapRef.current.style.transform = 'none';
-        singlePageWrapRef.current.style.transition = 'transform 0.25s ease, box-shadow 0.25s ease';
-        singlePageWrapRef.current.style.boxShadow = '';
-      }
+    twoFingerRef.current.active = 'none';
+  };
 
-      if (currentDeltaX < -65 && (!pageCount || page < pageCount)) {
-        animatedJump(page + 1, 'next');
-      } else if (currentDeltaX > 65 && page > 1) {
-        animatedJump(page - 1, 'prev');
-      }
+  // Mouse click tap toggle for desktop/laptop
+  const handleStageClick = (e: React.MouseEvent) => {
+    const selection = window.getSelection()?.toString().trim();
+    if (selection) return;
+
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer')) {
+      return;
     }
-
-    gestureRef.current.type = 'none';
-    gestureRef.current.currentDeltaX = 0;
+    setFocusMode(prev => !prev);
+    if (showNotes || showContents) {
+      setShowNotes(false);
+      setShowContents(false);
+    }
   };
 
   // Trackpad pinch-to-zoom (Ctrl + Wheel)
@@ -461,7 +492,7 @@ export default function App() {
     const activeBookmarks = bookmarks.filter(b => b.bookId === active.id).sort((a, b) => a.page - b.page);
 
     return (
-      <div className={`app reader-app theme-${theme}`}>
+      <div className={`app reader-app theme-${theme} ${focusMode ? 'focus-mode' : ''}`}>
         {/* Real-time Screen Dimming Overlay */}
         <div
           className="reader-brightness-overlay"
@@ -479,6 +510,7 @@ export default function App() {
           </div>
         )}
 
+        {/* Top Ribbon */}
         <header className="reader-topbar">
           <button className="icon-btn" onClick={closeBook} aria-label="Back to library">
             <ChevronLeft />
@@ -494,6 +526,13 @@ export default function App() {
               title={scrollMode === 'single' ? 'Continuous scroll' : 'Page by page'}
             >
               {scrollMode === 'single' ? <Rows3 /> : <FileText />}
+            </button>
+            <button
+              className={`icon-btn ${focusMode ? 'active-mode' : ''}`}
+              onClick={() => setFocusMode(!focusMode)}
+              title={focusMode ? 'Exit Focus Mode' : 'Focus Mode (Hide bars)'}
+            >
+              {focusMode ? <EyeOff /> : <Eye />}
             </button>
             <button className="icon-btn" onClick={() => setShowContents(!showContents)} title="Bookmarks">
               <ListFilter />
@@ -521,6 +560,7 @@ export default function App() {
           <section
             className="page-stage"
             ref={readerRef}
+            onClick={handleStageClick}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
@@ -544,13 +584,13 @@ export default function App() {
               >
                 {scrollMode === 'single' ? (
                   <div
-                    ref={singlePageWrapRef}
                     className={`pdf-page-wrap ${turnDirection ? `turning-${turnDirection}` : ''}`}
                     onMouseUp={() => {
                       const text = window.getSelection()?.toString().trim() ?? '';
                       if (text) setSelectedText(text.slice(0, 4000));
                     }}
                   >
+                    <div className="curl-fold-overlay" />
                     <Page
                       pageNumber={page}
                       scale={zoom}
@@ -582,46 +622,6 @@ export default function App() {
                   ))
                 )}
               </Document>
-            </div>
-
-            <div className="page-controls">
-              <button
-                className="icon-btn"
-                disabled={page <= 1}
-                onClick={() => animatedJump(page - 1, 'prev')}
-                aria-label="Previous page"
-              >
-                <ChevronLeft />
-              </button>
-              <div className="page-count">
-                <input
-                  aria-label="Current page"
-                  value={page}
-                  onChange={e => {
-                    const n = Number(e.target.value);
-                    if (Number.isFinite(n)) setPage(n);
-                  }}
-                  onBlur={() => jump(page)}
-                  onKeyDown={e => { if (e.key === 'Enter') jump(page); }}
-                />
-                <span>of {pageCount || '—'}</span>
-              </div>
-              <button
-                className="icon-btn"
-                disabled={!!pageCount && page >= pageCount}
-                onClick={() => animatedJump(page + 1, 'next')}
-                aria-label="Next page"
-              >
-                <ChevronRight />
-              </button>
-              <span className="control-divider" />
-              <button className="icon-btn" onClick={() => setZoom(z => Math.max(0.6, +(z - 0.1).toFixed(2)))} aria-label="Zoom out">
-                <ZoomOut />
-              </button>
-              <span className="zoom-value">{Math.round(zoom * 100)}%</span>
-              <button className="icon-btn" onClick={() => setZoom(z => Math.min(2.5, +(z + 0.1).toFixed(2)))} aria-label="Zoom in">
-                <ZoomIn />
-              </button>
             </div>
           </section>
 
@@ -711,6 +711,47 @@ export default function App() {
             </aside>
           )}
         </main>
+
+        {/* Fixed Stationary Page Navigation & Zoom Bar (Completely Immune to Scrolling) */}
+        <div className="page-controls" onClick={e => e.stopPropagation()}>
+          <button
+            className="icon-btn"
+            disabled={page <= 1}
+            onClick={() => animatedCurlJump(page - 1, 'prev')}
+            aria-label="Previous page"
+          >
+            <ChevronLeft />
+          </button>
+          <div className="page-count">
+            <input
+              aria-label="Current page"
+              value={page}
+              onChange={e => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) setPage(n);
+              }}
+              onBlur={() => jump(page)}
+              onKeyDown={e => { if (e.key === 'Enter') jump(page); }}
+            />
+            <span>of {pageCount || '—'}</span>
+          </div>
+          <button
+            className="icon-btn"
+            disabled={!!pageCount && page >= pageCount}
+            onClick={() => animatedCurlJump(page + 1, 'next')}
+            aria-label="Next page"
+          >
+            <ChevronRight />
+          </button>
+          <span className="control-divider" />
+          <button className="icon-btn" onClick={() => setZoom(z => Math.max(0.6, +(z - 0.1).toFixed(2)))} aria-label="Zoom out">
+            <ZoomOut />
+          </button>
+          <span className="zoom-value">{Math.round(zoom * 100)}%</span>
+          <button className="icon-btn" onClick={() => setZoom(z => Math.min(2.5, +(z + 0.1).toFixed(2)))} aria-label="Zoom in">
+            <ZoomIn />
+          </button>
+        </div>
 
         <footer className="reader-footer">
           <span><span className="status-dot" /> Saved on this device</span>
