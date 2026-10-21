@@ -14,6 +14,12 @@
   --green: #3e654d;
   --green-dark: #2f503c;
   --soft-green: #e6eee5;
+
+  /* Safe Area Insets for Android Notches & Camera Pinholes */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
 }
 
 * {
@@ -23,6 +29,7 @@
 body {
   margin: 0;
   min-width: 320px;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button, input, textarea, select {
@@ -55,7 +62,7 @@ button:disabled {
   width: 240px;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
-  padding: 28px 16px 20px;
+  padding: calc(28px + var(--sat)) 16px 20px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -134,7 +141,7 @@ button:disabled {
 }
 
 /* =========================================================================
-   LIBRARY MAIN & TOPBAR
+   LIBRARY MAIN & TOPBAR (CLEAR OF CAMERA PINHOLE)
    ========================================================================= */
 .library-main {
   flex: 1;
@@ -142,12 +149,14 @@ button:disabled {
 }
 
 .library-topbar {
-  height: 64px;
+  height: calc(64px + var(--sat));
+  padding-top: var(--sat);
+  padding-left: max(4%, var(--sal));
+  padding-right: max(4%, var(--sar));
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 4%;
   background: rgba(248, 247, 242, .75);
 }
 
@@ -743,7 +752,7 @@ button:disabled {
 }
 
 /* =========================================================================
-   READER, FOCUS MODE & THEMES
+   READER, FOCUS MODE & SAFE AREAS
    ========================================================================= */
 .reader-app {
   height: 100dvh;
@@ -756,7 +765,6 @@ button:disabled {
   background: var(--reader-bg);
   position: relative;
   overflow: hidden;
-  user-select: none;
 }
 
 .theme-sepia {
@@ -787,13 +795,16 @@ button:disabled {
   transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
 }
 
+/* Topbar cleared of the Camera Notch & System Status Bar */
 .reader-topbar {
-  height: 62px;
+  height: calc(62px + var(--sat));
+  padding-top: var(--sat);
+  padding-left: max(20px, var(--sal));
+  padding-right: max(20px, var(--sar));
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 20px;
   border-bottom: 1px solid var(--line);
   background: var(--paper);
   z-index: 40;
@@ -829,24 +840,25 @@ button:disabled {
   pointer-events: none;
 }
 
+/* Exit Focus Pill stays below the punch-hole camera */
 .focus-exit-pill {
   position: fixed;
-  top: 16px;
-  right: 18px;
+  top: calc(16px + var(--sat));
+  right: max(18px, var(--sar));
   z-index: 60;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 13px;
+  padding: 8px 14px;
   border-radius: 20px;
-  background: rgba(30, 36, 32, 0.82);
+  background: rgba(30, 36, 32, 0.85);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   color: white;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   font-size: 11px;
   font-weight: 600;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
   animation: hudFadeIn 0.2s ease-out;
 }
 
@@ -925,10 +937,10 @@ button:disabled {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 24px 16px 105px;
+  padding: 24px 16px calc(105px + var(--sab));
   scrollbar-width: thin;
   scrollbar-color: #b9b9ac transparent;
-  touch-action: pan-y pan-x;
+  touch-action: pan-y;
   cursor: default;
   -webkit-overflow-scrolling: touch;
 }
@@ -955,7 +967,7 @@ button:disabled {
   transform-style: preserve-3d;
   perspective: 1600px;
   will-change: transform, clip-path;
-  user-select: text;
+  -webkit-touch-callout: none; /* Suppresses Android native callout toolbar */
 }
 
 .curl-fold-overlay {
@@ -1061,6 +1073,8 @@ button:disabled {
   line-height: 1 !important;
   overflow: hidden !important;
   pointer-events: auto !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
 .react-pdf__Page__textContent span {
@@ -1085,7 +1099,7 @@ button:disabled {
 .page-controls {
   position: fixed !important;
   z-index: 50 !important;
-  bottom: 42px !important;
+  bottom: calc(42px + var(--sab)) !important;
   left: 50% !important;
   transform: translateX(-50%) !important;
   display: flex;
@@ -1151,11 +1165,11 @@ button:disabled {
 }
 
 /* =========================================================================
-   SELECTION POPOVER & DICTIONARY
+   SELECTION POPOVER (DISPLAYED ABOVE AND CLEAR OF OS CALLOUT)
    ========================================================================= */
 .selection-popover {
   position: fixed;
-  z-index: 85;
+  z-index: 9999;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1163,9 +1177,10 @@ button:disabled {
   background: #1f2521;
   color: #fff;
   border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
   transform: translate(-50%, -100%);
   animation: popoverScaleIn 0.15s ease-out;
+  pointer-events: auto;
 }
 
 .popover-btn {
@@ -1223,7 +1238,7 @@ button:disabled {
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  z-index: 120;
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1366,7 +1381,7 @@ button:disabled {
 
 .brightness-hud {
   position: fixed;
-  top: 80px;
+  top: calc(80px + var(--sat));
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
@@ -1411,12 +1426,14 @@ button:disabled {
    FOOTER & SIDEPANEL
    ========================================================================= */
 .reader-footer {
-  height: 30px;
+  height: calc(30px + var(--sab));
+  padding-bottom: var(--sab);
+  padding-left: max(20px, var(--sal));
+  padding-right: max(20px, var(--sar));
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 20px;
   background: var(--paper);
   border-top: 1px solid var(--line);
   font-size: 9px;
@@ -1454,7 +1471,7 @@ button:disabled {
   border-left: 1px solid var(--line);
   background: var(--paper);
   overflow: auto;
-  padding: 22px 18px 35px;
+  padding: calc(22px + var(--sat)) 18px calc(35px + var(--sab));
   z-index: 45;
 }
 
@@ -1637,7 +1654,7 @@ button:disabled {
 .toast {
   position: fixed;
   z-index: 130;
-  bottom: 24px;
+  bottom: calc(24px + var(--sab));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -1692,11 +1709,11 @@ button:disabled {
     display: none !important;
   }
   .library-main {
-    padding-bottom: 68px;
+    padding-bottom: calc(68px + var(--sab));
   }
   .library-topbar {
-    height: 56px;
-    padding: 0 16px;
+    height: calc(56px + var(--sat));
+    padding: var(--sat) 16px 0;
   }
   .mobile-brand {
     display: flex;
@@ -1736,7 +1753,6 @@ button:disabled {
     gap: 20px 14px;
   }
 
-  /* Only on mobile phones (<= 760px), display bottom dock */
   .mobile-nav {
     display: flex !important;
     position: fixed;
@@ -1744,8 +1760,8 @@ button:disabled {
     bottom: 0;
     left: 0;
     right: 0;
-    height: 60px;
-    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(60px + var(--sab));
+    padding-bottom: var(--sab);
     align-items: center;
     justify-content: space-around;
     background: #fbfaf6;
@@ -1769,6 +1785,6 @@ button:disabled {
   }
 
   .page-controls {
-    bottom: 36px !important;
+    bottom: calc(36px + var(--sab)) !important;
   }
 }
