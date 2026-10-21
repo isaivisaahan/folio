@@ -767,4 +767,5 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   }
   .mobile-nav button.active { color: var(--green); }
   .page-controls { bottom: 36px !important; }
+  .mobile-nav {display: none;}
 }
