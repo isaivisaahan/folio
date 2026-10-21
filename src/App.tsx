@@ -11,7 +11,7 @@ import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './d
 type Theme = 'paper' | 'sepia' | 'night';
 type ScrollMode = 'single' | 'continuous';
 
-const APK_DOWNLOAD_URL = 'https://github.com/isaivisaahan/folio/releases/download/v0.1.0/app-debug.apk';
+const APK_DOWNLOAD_URL = 'https://github.com/isaivisaahan/folio/releases/download/v0.1.0/folio-reader.apk';
 
 interface DictDefinition {
   definition: string;
