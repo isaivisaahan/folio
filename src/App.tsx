@@ -11,7 +11,7 @@ import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './d
 type Theme = 'paper' | 'sepia' | 'night';
 type ScrollMode = 'single' | 'continuous';
 
-const APK_DOWNLOAD_URL = 'https://github.com/isaivisaahan/folio/releases/download/v0.1.0/folio-reader.apk';
+const APK_DOWNLOAD_URL = 'https://github.com/isaivisaahan/folio/releases/download/v0.1.0/app-debug.apk';
 
 interface DictDefinition {
   definition: string;
@@ -41,7 +41,6 @@ async function fetchWordDefinition(rawWord: string): Promise<DictResult | null> 
   const cleanWord = rawWord.replace(/[^a-zA-Z'-]/g, '').toLowerCase();
   if (!cleanWord) return null;
 
-  // 1. Try Free Dictionary API
   try {
     const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`);
     if (res.ok) {
@@ -62,7 +61,6 @@ async function fetchWordDefinition(rawWord: string): Promise<DictResult | null> 
     // Proceed to Datamuse fallback
   }
 
-  // 2. Fallback to Datamuse API (Guaranteed CORS enabled, high uptime)
   try {
     const res = await fetch(`https://api.datamuse.com/words?sp=${encodeURIComponent(cleanWord)}&md=dp&max=1`);
     if (res.ok) {
@@ -70,14 +68,8 @@ async function fetchWordDefinition(rawWord: string): Promise<DictResult | null> 
       if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].defs) && data[0].defs.length > 0) {
         const item = data[0];
         const posMap: Record<string, string> = {
-          n: 'noun',
-          v: 'verb',
-          adj: 'adjective',
-          adv: 'adverb',
-          prep: 'preposition',
-          pron: 'pronoun',
-          conj: 'conjunction',
-          interj: 'interjection'
+          n: 'noun', v: 'verb', adj: 'adjective', adv: 'adverb',
+          prep: 'preposition', pron: 'pronoun', conj: 'conjunction', interj: 'interjection'
         };
 
         const grouped: Record<string, DictDefinition[]> = {};
@@ -94,17 +86,13 @@ async function fetchWordDefinition(rawWord: string): Promise<DictResult | null> 
           definitions
         }));
 
-        return {
-          word: item.word || cleanWord,
-          meanings
-        };
+        return { word: item.word || cleanWord, meanings };
       }
     }
   } catch {
     // Proceed to Wiktionary fallback
   }
 
-  // 3. Fallback to Wikimedia Wiktionary REST API
   try {
     const res = await fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(cleanWord)}`);
     if (res.ok) {
@@ -175,10 +163,7 @@ export default function App() {
   const transformLayerRef = useRef<HTMLDivElement>(null);
 
   const singleTapRef = useRef<{ x: number; y: number; time: number; hasMoved: boolean }>({
-    x: 0,
-    y: 0,
-    time: 0,
-    hasMoved: false
+    x: 0, y: 0, time: 0, hasMoved: false
   });
 
   const twoFingerRef = useRef<{
@@ -189,12 +174,7 @@ export default function App() {
     startBrightness: number;
     scaleRatio: number;
   }>({
-    active: 'none',
-    startDist: 0,
-    startCenterY: 0,
-    startZoom: 1,
-    startBrightness: 1,
-    scaleRatio: 1
+    active: 'none', startDist: 0, startCenterY: 0, startZoom: 1, startBrightness: 1, scaleRatio: 1
   });
 
   const refresh = async () => {
@@ -380,6 +360,7 @@ export default function App() {
     }
   };
 
+  // Text Selection Check
   const checkSelection = () => {
     const sel = window.getSelection();
     const text = sel?.toString().trim() ?? '';
@@ -394,7 +375,8 @@ export default function App() {
       const rect = range.getBoundingClientRect();
       if (rect.width || rect.height) {
         const x = Math.max(130, Math.min(window.innerWidth - 130, rect.left + rect.width / 2));
-        const y = Math.max(70, rect.top - 12);
+        // Position comfortably above selection and clear of notch
+        const y = Math.max(90, rect.top - 16);
         setPopoverPos({ x, y });
       }
     } catch {
@@ -468,119 +450,140 @@ export default function App() {
     }
   };
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      const t = e.touches[0];
-      singleTapRef.current = {
-        x: t.clientX,
-        y: t.clientY,
-        time: Date.now(),
-        hasMoved: false
-      };
-      twoFingerRef.current.active = 'none';
-    } else if (e.touches.length === 2) {
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const centerY = (t1.clientY + t2.clientY) / 2;
-      const centerX = (t1.clientX + t2.clientX) / 2;
+  // =========================================================================
+  // HARDWARE-ACCELERATED NATIVE TOUCH LISTENERS (FIXES ANDROID WEBVIEW PINCH)
+  // =========================================================================
+  useEffect(() => {
+    const el = readerRef.current;
+    if (!el || !active) return;
 
-      if (transformLayerRef.current) {
-        const rect = transformLayerRef.current.getBoundingClientRect();
-        const originX = Math.round(centerX - rect.left);
-        const originY = Math.round(centerY - rect.top);
-        transformLayerRef.current.style.transformOrigin = `${originX}px ${originY}px`;
-      }
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        singleTapRef.current = { x: t.clientX, y: t.clientY, time: Date.now(), hasMoved: false };
+        twoFingerRef.current.active = 'none';
+      } else if (e.touches.length === 2) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const centerY = (t1.clientY + t2.clientY) / 2;
+        const centerX = (t1.clientX + t2.clientX) / 2;
 
-      twoFingerRef.current = {
-        active: 'deciding',
-        startDist: Math.max(10, dist),
-        startCenterY: centerY,
-        startZoom: zoom,
-        startBrightness: brightness,
-        scaleRatio: 1
-      };
-      singleTapRef.current.hasMoved = true;
-    }
-  };
+        if (transformLayerRef.current) {
+          const rect = transformLayerRef.current.getBoundingClientRect();
+          const originX = Math.round(centerX - rect.left);
+          const originY = Math.round(centerY - rect.top);
+          transformLayerRef.current.style.transformOrigin = `${originX}px ${originY}px`;
+        }
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      const t = e.touches[0];
-      const dx = Math.abs(t.clientX - singleTapRef.current.x);
-      const dy = Math.abs(t.clientY - singleTapRef.current.y);
-      if (dx > 12 || dy > 12) {
+        twoFingerRef.current = {
+          active: 'deciding',
+          startDist: Math.max(10, dist),
+          startCenterY: centerY,
+          startZoom: zoom,
+          startBrightness: brightness,
+          scaleRatio: 1
+        };
         singleTapRef.current.hasMoved = true;
       }
-      return;
-    }
+    };
 
-    if (e.touches.length === 2) {
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const currentCenterY = (t1.clientY + t2.clientY) / 2;
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const dx = Math.abs(t.clientX - singleTapRef.current.x);
+        const dy = Math.abs(t.clientY - singleTapRef.current.y);
+        if (dx > 12 || dy > 12) singleTapRef.current.hasMoved = true;
+        return;
+      }
 
-      const deltaDist = currentDist - twoFingerRef.current.startDist;
-      const deltaY = currentCenterY - twoFingerRef.current.startCenterY;
+      if (e.touches.length === 2) {
+        // Prevent native WebView pinch-zoom conflict
+        if (e.cancelable) e.preventDefault();
 
-      if (twoFingerRef.current.active === 'deciding') {
-        if (Math.abs(deltaDist) > 10) {
-          twoFingerRef.current.active = 'pinch';
-        } else if (Math.abs(deltaY) > 22 && Math.abs(deltaDist) < 12) {
-          twoFingerRef.current.active = 'brightness';
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const currentCenterY = (t1.clientY + t2.clientY) / 2;
+        const deltaDist = currentDist - twoFingerRef.current.startDist;
+        const deltaY = currentCenterY - twoFingerRef.current.startCenterY;
+
+        if (twoFingerRef.current.active === 'deciding') {
+          if (Math.abs(deltaDist) > 10) {
+            twoFingerRef.current.active = 'pinch';
+          } else if (Math.abs(deltaY) > 22 && Math.abs(deltaDist) < 12) {
+            twoFingerRef.current.active = 'brightness';
+          }
+        }
+
+        if (twoFingerRef.current.active === 'pinch') {
+          const ratio = currentDist / twoFingerRef.current.startDist;
+          twoFingerRef.current.scaleRatio = ratio;
+          if (transformLayerRef.current) {
+            transformLayerRef.current.style.transform = `scale(${ratio})`;
+            transformLayerRef.current.style.transition = 'none';
+          }
+        } else if (twoFingerRef.current.active === 'brightness') {
+          const sensitivity = 0.0035;
+          const newBright = Math.min(1.0, Math.max(0.15, +(twoFingerRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
+          setBrightness(newBright);
+          setShowBrightnessHud(true);
+
+          if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
+          hudTimerRef.current = window.setTimeout(() => setShowBrightnessHud(false), 1400);
+        }
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.changedTouches.length === 1 && !singleTapRef.current.hasMoved) {
+        const dt = Date.now() - singleTapRef.current.time;
+        if (dt < 380) {
+          const selection = window.getSelection()?.toString().trim();
+          if (!selection) {
+            const target = e.target as HTMLElement;
+            if (!target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer, .selection-popover, .dictionary-card')) {
+              toggleFocusMode();
+            }
+          }
         }
       }
 
       if (twoFingerRef.current.active === 'pinch') {
-        const ratio = currentDist / twoFingerRef.current.startDist;
-        twoFingerRef.current.scaleRatio = ratio;
+        const { startZoom, scaleRatio } = twoFingerRef.current;
+        const finalZoom = Math.min(2.5, Math.max(0.6, +(startZoom * scaleRatio).toFixed(2)));
+
         if (transformLayerRef.current) {
-          transformLayerRef.current.style.transform = `scale(${ratio})`;
+          transformLayerRef.current.style.transform = 'none';
+          transformLayerRef.current.style.transformOrigin = 'center top';
           transformLayerRef.current.style.transition = 'none';
         }
-      } else if (twoFingerRef.current.active === 'brightness') {
-        const sensitivity = 0.0035;
-        const newBright = Math.min(1.0, Math.max(0.15, +(twoFingerRef.current.startBrightness - deltaY * sensitivity).toFixed(2)));
-        setBrightness(newBright);
-        setShowBrightnessHud(true);
 
-        if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
-        hudTimerRef.current = window.setTimeout(() => setShowBrightnessHud(false), 1400);
-      }
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    if (e.changedTouches.length === 1 && !singleTapRef.current.hasMoved) {
-      const dt = Date.now() - singleTapRef.current.time;
-      if (dt < 380) {
-        const selection = window.getSelection()?.toString().trim();
-        if (!selection) {
-          const target = e.target as HTMLElement;
-          if (!target.closest('button, input, textarea, select, .reader-sidepanel, .page-controls, .reader-topbar, .reader-footer, .selection-popover, .dictionary-card')) {
-            toggleFocusMode();
-          }
-        }
-      }
-    }
-
-    if (twoFingerRef.current.active === 'pinch') {
-      const { startZoom, scaleRatio } = twoFingerRef.current;
-      const finalZoom = Math.min(2.5, Math.max(0.6, +(startZoom * scaleRatio).toFixed(2)));
-
-      if (transformLayerRef.current) {
-        transformLayerRef.current.style.transform = 'none';
-        transformLayerRef.current.style.transformOrigin = 'center top';
-        transformLayerRef.current.style.transition = 'none';
+        setZoom(finalZoom);
       }
 
-      setZoom(finalZoom);
-    }
+      twoFingerRef.current.active = 'none';
+      window.setTimeout(checkSelection, 60);
+    };
 
-    twoFingerRef.current.active = 'none';
-    window.setTimeout(checkSelection, 60);
-  };
+    // Suppress native Android selection context menu popup over our custom menu
+    const onContextMenu = (e: Event) => {
+      e.preventDefault();
+      checkSelection();
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    el.addEventListener('contextmenu', onContextMenu);
+
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('contextmenu', onContextMenu);
+    };
+  }, [active, zoom, brightness, focusMode]);
 
   const handleStageClick = (e: React.MouseEvent) => {
     const selection = window.getSelection()?.toString().trim();
@@ -816,7 +819,7 @@ export default function App() {
                       <a
                         href={`https://www.google.com/search?q=define+${encodeURIComponent(dictWord)}`}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="secondary-btn"
                         style={{ fontSize: 11, padding: '6px 12px', textDecoration: 'none' }}
                       >
@@ -826,7 +829,7 @@ export default function App() {
                       <a
                         href={`https://en.wiktionary.org/wiki/${encodeURIComponent(dictWord)}`}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="secondary-btn"
                         style={{ fontSize: 11, padding: '6px 12px', textDecoration: 'none' }}
                       >
@@ -922,10 +925,6 @@ export default function App() {
             className="page-stage"
             ref={readerRef}
             onClick={handleStageClick}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-            onMouseUp={() => window.setTimeout(checkSelection, 40)}
             onWheel={handleWheel}
           >
             {loading && <div className="loading-state">Opening your book…</div>}
@@ -1144,6 +1143,8 @@ export default function App() {
         <div className="sidebar-bottom">
           <a
             href={APK_DOWNLOAD_URL}
+            target="_blank"
+            rel="noopener noreferrer"
             className="nav-item settings-nav"
             style={{ textDecoration: 'none', color: 'var(--green)', fontWeight: 600 }}
             title="Download Android APK directly"
@@ -1196,6 +1197,8 @@ export default function App() {
                 </label>
                 <a
                   href={APK_DOWNLOAD_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="secondary-btn"
                   style={{ textDecoration: 'none', height: 38 }}
                   title="Download Android APK"
