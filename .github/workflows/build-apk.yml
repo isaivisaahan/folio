@@ -11,39 +11,49 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
 
-      - name: Set up Java
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: '21'
+
+      # If your files are nested inside a 'folio-mvp' folder, auto-promote them to root
+      - name: Check and align repository directory
+        run: |
+          if [ -d "folio-mvp" ] && [ -f "folio-mvp/package.json" ]; then
+            echo "Detected folio-mvp subfolder. Aligning to root..."
+            cp -r folio-mvp/* .
+            cp -r folio-mvp/.* . 2>/dev/null || true
+          fi
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
-      - name: Build Web App
+      - name: Build Web Application
         run: npm run build
 
-      - name: Sync with Capacitor Android
-        run: npx cap sync android
+      - name: Generate Android Platform & Sync
+        run: |
+          npx cap add android
+          npx cap sync android
 
-      - name: Grant execute permission for gradlew
+      - name: Set gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Build Android APK
+      - name: Build APK with Gradle
         run: |
           cd android
           ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: folio-reader-apk
