@@ -11,6 +11,8 @@ import { db, makeId, type Book, type Bookmark as BookMark, type Note } from './d
 type Theme = 'paper' | 'sepia' | 'night';
 type ScrollMode = 'single' | 'continuous';
 
+const APK_DOWNLOAD_URL = 'https://github.com/isaivisaahan/folio/releases/download/v0.1.0/app-debug.apk';
+
 interface DictDefinition {
   definition: string;
   example?: string;
@@ -1140,6 +1142,14 @@ export default function App() {
           <NotebookPen size={17} /> Notebook <span className="nav-count">{notes.length}</span>
         </button>
         <div className="sidebar-bottom">
+          <a
+            href={APK_DOWNLOAD_URL}
+            className="nav-item settings-nav"
+            style={{ textDecoration: 'none', color: 'var(--green)', fontWeight: 600 }}
+            title="Download Android APK directly"
+          >
+            <Download size={16} /> <span>Download Android APK</span>
+          </a>
           <button className="nav-item settings-nav" onClick={exportBackup}>
             <Download size={16} /> Export backup
           </button>
@@ -1184,6 +1194,15 @@ export default function App() {
                     <option value="title">A–Z</option>
                   </select>
                 </label>
+                <a
+                  href={APK_DOWNLOAD_URL}
+                  className="secondary-btn"
+                  style={{ textDecoration: 'none', height: 38 }}
+                  title="Download Android APK"
+                >
+                  <Download size={16} />
+                  <span>Download APK</span>
+                </a>
                 <button className="primary-btn" onClick={() => inputRef.current?.click()} disabled={importing}>
                   <FilePlus2 size={16} />
                   <span>{importing ? 'Importing…' : 'Import'}</span>
