@@ -57,7 +57,7 @@ async function fetchWordDefinition(rawWord: string): Promise<DictResult | null> 
       }
     }
   } catch {
-    // Silently proceed to Datamuse fallback
+    // Proceed to Datamuse fallback
   }
 
   // 2. Fallback to Datamuse API (Guaranteed CORS enabled, high uptime)
@@ -417,7 +417,6 @@ export default function App() {
     setToast('Highlight saved.');
   };
 
-  // Perform multi-tier lookup
   const lookupDictionary = async () => {
     const words = selectedText.trim().split(/\s+/);
     const rawWord = words[0].replace(/[^a-zA-Z'-]/g, '').toLowerCase();
@@ -437,13 +436,11 @@ export default function App() {
     setDictLoading(false);
   };
 
-  // Audio pronunciation with Native SpeechSynthesis fallback
   const playWordPronunciation = () => {
     if (dictResult?.audio) {
       const audioUrl = dictResult.audio.startsWith('//') ? `https:${dictResult.audio}` : dictResult.audio;
       const sound = new Audio(audioUrl);
       sound.play().catch(() => {
-        // Fallback to native Web Speech API if remote audio playback fails
         speakNative(dictResult.word || dictWord);
       });
     } else {
@@ -469,7 +466,6 @@ export default function App() {
     }
   };
 
-  // Touch engine with focal point zoom
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
       const t = e.touches[0];
@@ -1073,6 +1069,7 @@ export default function App() {
           )}
         </main>
 
+        {/* Stationary Floating Page Controls */}
         <div className="page-controls" onClick={e => e.stopPropagation()}>
           <button
             className="icon-btn"
